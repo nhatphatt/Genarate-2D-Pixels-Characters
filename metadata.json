@@ -1,0 +1,6 @@
+{
+  "name": "2D Pixel Art Game Character Engine",
+  "description": "Generate base characters and sprite sheet animations using Gemini 2.5 Flash Image. Remove backgrounds block by block then compile a fluid 7-row game animation engine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
