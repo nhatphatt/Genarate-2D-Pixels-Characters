@@ -1,143 +1,256 @@
-# 🎮 2D Pixel Art Game Character Engine
+<div align="center">
 
-> AI-powered 2D pixel art character generator with sprite sheet animation and game engine export — built with React + Vite + Gemini AI.
+# ⚡ 2D Pixel Art Game Character Engine
+
+**AI-generated pixel art characters → animated sprite sheets → game-ready export**
+
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Vite](https://img.shields.io/badge/Vite-6-646CFF?style=flat-square&logo=vite&logoColor=white)](https://vitejs.dev)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind-v4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
+[![Gemini](https://img.shields.io/badge/Gemini-2.5_Flash-4285F4?style=flat-square&logo=google&logoColor=white)](https://ai.google.dev)
+[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
+
+[**Demo**](#-getting-started) · [**Architecture**](#-architecture) · [**Contributing**](#-contributing)
+
+</div>
 
 ---
 
-## ✨ Features
+## Overview
 
-- **AI Character Generation** — Describe any character and Gemini AI generates a pixel art sprite with a chroma-key green background
-- **Frame-by-Frame Animation** — Each animation frame is generated individually for maximum consistency (Walk, Run, Attack, Jump, Hurt, Death + custom)
-- **Automatic Background Removal** — Chroma-key flood fill removes the green background per frame before compositing
-- **Auto-Flip Detection** — Color-pattern comparison catches and corrects mirrored frames from AI output
-- **Sprite Sheet Compiler** — Extracts, normalizes, and assembles all animation rows into a single grid sprite sheet
-- **Live Game Viewport** — Canvas-based engine preview with keyboard & touch controls (Arrow keys / WASD)
-- **Game Engine Export** — Download PNG sprite sheet + JSON Atlas (TexturePacker-compatible) for Unity, Godot, Phaser, GameMaker
+A browser-based tool that uses **Gemini 2.5 Flash** to generate 2D pixel art game characters and compile them into production-ready animated sprite sheets.
+
+The pipeline generates each animation frame **individually** — providing the reference image on every API call — then assembles them via canvas code. This approach eliminates the consistency and direction-flipping issues common to single-prompt multi-frame generation.
+
+```
+Prompt → Character (PNG) → Animations (frame-by-frame) → Sprite Sheet → Export (PNG + JSON Atlas)
+```
 
 ---
 
-## 🏗️ Architecture
+## Features
+
+- **Character Generation** — Text-to-pixel-art via Gemini image generation with `#00FF00` chroma-key background
+- **Frame-by-Frame Animation** — Each frame generated independently with reference image for style/direction consistency
+- **Chroma-Key BG Removal** — Per-frame flood-fill with 8-directional edge detection, defringe pass, green-dominance guard
+- **Auto-Flip Correction** — Color-pattern comparison (left/right thirds) catches AI-mirrored frames and corrects them
+- **Sprite Sheet Compiler** — Column-gap detection → frame extraction → max-height normalization → bottom-center alignment
+- **Live Viewport** — Canvas game engine preview with keyboard + touch controls
+- **Game Engine Export** — PNG sprite sheet + TexturePacker-compatible JSON Atlas
+
+---
+
+## Architecture
 
 ```
 src/
-├── services/ai.ts          — Gemini API: character + per-frame animation generation
-├── lib/imageUtils.ts       — Chroma-key background removal (flood fill, defringe)
-├── lib/spriteCompiler.ts   — Frame extraction, auto-flip detection, sprite sheet assembly
-├── components/GameViewport.tsx  — Canvas game engine with keyboard/touch input
-└── App.tsx                 — 3-step UI: Character → Animations → Test & Export
+├── services/
+│   └── ai.ts                 # Gemini API — character & per-frame animation generation
+│                             # generateSingleFrame() → removeBackground() → combineFramesIntoStrip()
+├── lib/
+│   ├── imageUtils.ts         # Chroma-key removal: perimeter sampling → flood fill → defringe
+│   └── spriteCompiler.ts     # Frame extraction, auto-flip detection, normalization, sheet assembly
+├── components/
+│   └── GameViewport.tsx      # Canvas renderer — row/col sprite indexing, keyboard/touch FSM
+└── App.tsx                   # 3-step UI: Character → Animations → Test & Export
 ```
+
+### Key Design Decisions
+
+| Decision | Rationale |
+|---|---|
+| Generate 1 frame per API call | Prevents style drift, direction flip, and scale inconsistency across frames |
+| Remove BG per-frame before combining | Flood fill works reliably on isolated green backgrounds; fails on combined strips |
+| Max-height scaling (not average) | AI draws at same pixel scale per-row; shorter frames are pose-variation, not scale-variation |
+| Color-pattern flip detection | Center-of-mass fails on symmetric characters; L/R color avg catches outfit-side flips |
+| Idle generated by code | Eliminates 1 API call; avoids AI-introduced style variation in the most-viewed animation |
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) (v18+)
-- A [Gemini API Key](https://aistudio.google.com/app/apikey) (free tier works)
 
-### Setup
+- **Node.js** ≥ 18
+- **Gemini API Key** — [Get one free](https://aistudio.google.com/app/apikey)
 
-1. **Clone the repo**
-   ```bash
-   git clone https://github.com/nhatphatt/Genarate-2D-Pixels-Characters.git
-   cd Genarate-2D-Pixels-Characters
-   ```
+### Installation
 
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
+```bash
+git clone https://github.com/nhatphatt/Genarate-2D-Pixels-Characters.git
+cd Genarate-2D-Pixels-Characters
+npm install
+```
 
-3. **Configure your API key**
+### Environment
 
-   Copy the example env file and add your key:
-   ```bash
-   cp .env.example .env.local
-   ```
-   Then edit `.env.local`:
-   ```
-   GEMINI_API_KEY=your_api_key_here
-   ```
+```bash
+cp .env.example .env.local
+```
 
-4. **Run locally**
-   ```bash
-   npm run dev
-   ```
-   Open [http://localhost:5173](http://localhost:5173)
+Edit `.env.local`:
+
+```env
+GEMINI_API_KEY=your_key_here
+```
+
+### Development
+
+```bash
+npm run dev        # Start dev server at http://localhost:3000
+npm run build      # Production build
+npm run lint       # Type-check (tsc --noEmit)
+```
 
 ---
 
-## 🎨 Workflow
+## Usage
 
-```
-Step 1 → Describe your character → AI generates pixel art sprite
-Step 2 → Generate animations row by row (or Auto-Gen All)
-Step 3 → Preview in live engine → Export PNG + JSON Atlas
-```
+### 3-Step Workflow
 
-### Controls (in-engine preview)
-| Key | Action |
-|-----|--------|
-| `←` / `→` or `A` / `D` | Walk |
-| `Shift + ←/→` | Run |
+**Step 1 — Character**
+Describe your character in natural language. The AI generates a pixel art sprite with a solid `#00FF00` background.
+
+**Step 2 — Animations**
+Click `⚡ Auto-Gen All Missing` or generate rows individually. Each animation makes 4 sequential API calls (one per frame) and displays live progress. Use `🔄 Re-Gen All` to regenerate everything from scratch.
+
+**Step 3 — Test & Export**
+Preview animations in the live canvas viewport, then download:
+- `spritesheet.png` — transparent background, lossless
+- `spritesheet.json` — TexturePacker JSON Hash atlas with frame coordinates and animation tags
+
+### Viewport Controls
+
+| Input | Action |
+|---|---|
+| `←` `→` / `A` `D` | Walk |
+| `Shift` + direction | Run |
 | `Space` | Jump |
 | `Z` | Attack |
 | `X` | Hurt |
 
 ---
 
-## 📦 Export Formats
+## Sprite Sheet Spec
 
-After generating all animations, export from the **Test & Export** tab:
+| Property | Value |
+|---|---|
+| Frames per row | 4 |
+| Layout | Grid (uniform cells) |
+| Alignment | Bottom-center per cell |
+| Background | Transparent (RGBA) |
+| Format | PNG (lossless) |
+| Idle source | Code-generated (no AI call) |
 
-| File | Use for |
-|------|---------|
-| `spritesheet.png` | All engines — lossless, transparent background |
-| `spritesheet.json` | Phaser / PixiJS (`this.load.atlas()`), or as grid metadata |
+### Row Order (default)
 
-### Engine Import Guide
-
-**Unity** — Import PNG → Texture Type: `Sprite` → Sprite Mode: `Multiple` → Sprite Editor → Slice by Grid Cell Size
-
-**Godot** — `AnimatedSprite2D` → SpriteFrames → Add from Sheet → set grid size
-
-**Phaser / PixiJS** — Load both files:
-```js
-this.load.atlas('hero', 'spritesheet.png', 'spritesheet.json');
+```
+Row 0 → Idle
+Row 1 → Walk
+Row 2 → Run
+Row 3 → Attack
+Row 4 → Jump
+Row 5 → Hurt
+Row 6 → Death
 ```
 
-**GameMaker / Other** — Import PNG as grid-based sprite sheet using the frame dimensions shown in the Export panel.
+Rows are user-configurable — add, remove, or rename animations in the UI.
 
 ---
 
-## 🛠️ Tech Stack
+## Export & Game Engine Integration
 
-| Layer | Technology |
-|-------|-----------|
-| Framework | React 18 + Vite |
-| Language | TypeScript (strict) |
-| Styling | Tailwind CSS v4 |
-| AI | Google Gemini 2.5 Flash (image generation) |
-| Canvas | HTML5 Canvas API |
+Download both files from the **Test & Export** tab, then:
+
+**Unity**
+```
+Import PNG → Texture Type: Sprite → Sprite Mode: Multiple
+→ Sprite Editor → Slice → Grid By Cell Size → Apply
+```
+
+**Godot**
+```
+AnimatedSprite2D → SpriteFrames → Add from Sheet
+→ select PNG → set grid dimensions → assign frames per animation
+```
+
+**Phaser / PixiJS**
+```js
+// Preload
+this.load.atlas('hero', 'spritesheet.png', 'spritesheet.json');
+
+// Play animation
+this.anims.create({
+  key: 'walk',
+  frames: this.anims.generateFrameNames('hero', { prefix: 'walk_', start: 0, end: 3 }),
+  frameRate: 8,
+  repeat: -1,
+});
+```
+
+**GameMaker Studio**
+```
+Import PNG as Sprite → set Frame Width/Height from JSON grid metadata
+```
 
 ---
 
-## 📋 Sprite Sheet Rules
+## Background Removal Algorithm
 
-- **4 frames per row**, horizontal strip
-- **Uniform cell size** — all frames normalized to same dimensions
-- **Bottom-center aligned** per cell
-- **Transparent background** — chroma-key removed per frame
-- **Idle** — generated by code (4x duplicated base character with subtle y-offset)
+The chroma-key pipeline in `imageUtils.ts` follows this sequence:
 
----
+1. **Perimeter sampling** — detect dominant background color from image edges
+2. **Flood fill** (8-directional) from all edge pixels — removes connected background  
+3. **`isBg` check**: per-channel tolerance AND `g >= r && g >= b` (prevents removing yellow/orange pixels)
+4. **Global strict pass** — half tolerance, catches trapped green in small gaps
+5. **Defringe pass** — erodes green-dominant pixels adjacent to transparent regions
 
-## 🔒 Security
-
-The `.env.local` file containing your `GEMINI_API_KEY` is excluded from git via `.gitignore` and will never be committed.
+> ⚠️ Euclidean distance is intentionally **not used** — it confuses yellows and oranges with green.
 
 ---
 
-## 📄 License
+## Contributing
 
-MIT
+Contributions are welcome. Please follow these conventions:
+
+```bash
+# Fork → clone → branch
+git checkout -b feat/your-feature
+
+# After changes
+npm run lint        # Must pass with no new errors
+git commit -m "feat: description"   # Conventional commits preferred
+git push origin feat/your-feature
+# Open a Pull Request
+```
+
+### Commit Convention
+
+```
+feat:     New feature
+fix:      Bug fix
+perf:     Performance improvement
+refactor: Code restructure without behavior change
+docs:     Documentation only
+```
+
+---
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `GEMINI_API_KEY` | ✅ | Google Gemini API key. Never commit this. |
+
+---
+
+## License
+
+[MIT](LICENSE) — free to use in personal and commercial projects.
+
+---
+
+<div align="center">
+<sub>Built with <a href="https://ai.google.dev">Gemini AI</a> · <a href="https://react.dev">React</a> · <a href="https://vitejs.dev">Vite</a></sub>
+</div>
