@@ -39,30 +39,12 @@ Style rules:
   throw new Error("No image generated.");
 }
 
-export function generateIdleRow(baseCharImage: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const fw = img.width;
-      const fh = img.height;
-      const gap = Math.max(20, Math.floor(fw * 0.5)); // large gap between frames
-      const canvas = document.createElement('canvas');
-      canvas.width = fw * 4 + gap * 3;
-      canvas.height = fh;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return reject(new Error('No canvas context'));
-
-      // Frame 1: original, Frame 2: shift down 2px, Frame 3: original, Frame 4: shift up 1px
-      const offsets = [0, 2, 0, -1];
-      for (let i = 0; i < 4; i++) {
-        ctx.drawImage(img, i * (fw + gap), offsets[i]);
-      }
-      resolve(canvas.toDataURL('image/png'));
-    };
-    img.onerror = () => reject(new Error('Image load error'));
-    img.src = baseCharImage;
-  });
+export interface AnimationRowResult {
+  rowUrl: string;
+  framesUrls: string[];
 }
+
+
 
 // ============================================================
 // FRAME DESCRIPTIONS — one pose per frame, per animation
@@ -70,20 +52,27 @@ export function generateIdleRow(baseCharImage: string): Promise<string> {
 function getFrameDescriptions(animName: string, customPrompt?: string): string[] {
   if (customPrompt && customPrompt.trim()) {
     return [
-      `${customPrompt} — starting pose (frame 1 of 4)`,
-      `${customPrompt} — in progress (frame 2 of 4)`,
-      `${customPrompt} — peak action (frame 3 of 4)`,
-      `${customPrompt} — finishing/recovery (frame 4 of 4)`,
+      `${customPrompt} — starting pose (frame 1 of 4). DO NOT flip or mirror.`,
+      `${customPrompt} — in progress (frame 2 of 4). Character faces SAME direction as reference. Keep outfit details on the SAME side.`,
+      `${customPrompt} — peak action (frame 3 of 4). DO NOT flip. Character must face EXACTLY the same way.`,
+      `${customPrompt} — finishing/recovery (frame 4 of 4). Keep the same facing direction as all other frames. DO NOT mirror.`,
     ];
   }
 
   switch (animName) {
+    case "Idle":
+      return [
+        "Idle pose: standing perfectly still, relaxed neutral stance, normal breathing. DO NOT flip or mirror.",
+        "Idle pose: chest slightly expanded, shoulders slightly raised (breathing in). Character faces EXACTLY the SAME direction as reference.",
+        "Idle pose: peak of breath, body slightly taller, very subtle movement. Keep outfit details on the SAME side.",
+        "Idle pose: exhaling, shoulders relaxing back down to start. DO NOT flip. Character must face EXACTLY the same way.",
+      ];
     case "Walk":
       return [
-        "Walking pose: right foot stepping forward, left arm extended forward, back straight, body upright.",
-        "Walking pose: legs passing each other mid-stride, body dipping slightly, weight shifting.",
-        "Walking pose: left foot stepping forward, right arm extended forward, back straight, body upright.",
-        "Walking pose: legs passing each other mid-stride, body dipping slightly, returning to start position.",
+        "Walking pose: one leg stepping in front, opposite arm extended in front, back straight, body upright. DO NOT flip or mirror.",
+        "Walking pose: legs passing each other mid-stride, body dipping slightly, weight shifting. Keep outfit details on the SAME side as reference.",
+        "Walking pose: opposite leg stepping in front, other arm extended in front. Character faces SAME direction as reference.",
+        "Walking pose: legs passing each other mid-stride, body dipping slightly. DO NOT flip. Keep the same facing direction.",
       ];
     case "Run":
       return [
@@ -101,31 +90,31 @@ function getFrameDescriptions(animName: string, customPrompt?: string): string[]
       ];
     case "Jump":
       return [
-        "Jump preparation pose: crouching down, knees deeply bent, arms pulled down, about to spring up.",
-        "Jump launch pose: springing upward, legs pushing off, arms swinging up.",
-        "Jump apex pose: at the highest point in air, arms raised above head, legs tucked slightly.",
-        "Jump landing pose: falling downward, legs extending below, arms out for balance.",
+        "Jump preparation pose: crouching down, knees deeply bent, arms pulled down, about to spring up. DO NOT flip or mirror the character.",
+        "Jump launch pose: springing upward, legs pushing off, arms swinging up. Keep outfit details on the SAME side as reference.",
+        "Jump apex pose: at the highest point in air, arms raised above head, legs tucked slightly. Character faces SAME direction as reference.",
+        "Jump landing pose: falling downward, legs extending below, arms out for balance. DO NOT flip. Keep the same facing direction.",
       ];
     case "Hurt":
       return [
-        "Hurt reaction pose: initial flinch, head tilting back slightly, eyes squinting.",
-        "Hurt recoil pose: body recoiling backward, one arm raised defensively in front.",
-        "Hurt hunched pose: body hunched forward, tense, pain expression, arms close to body.",
-        "Hurt holding pose: still hunched and tense, same as previous frame, holding the pain.",
+        "Hurt reaction pose: initial flinch, head tilting back slightly, eyes squinting. DO NOT flip or mirror.",
+        "Hurt recoil pose: body recoiling backward, one arm raised defensively in front. Keep character facing SAME direction as reference.",
+        "Hurt hunched pose: body hunched forward, tense, pain expression, arms close to body. Keep outfit details on the SAME side.",
+        "Hurt holding pose: still hunched and tense, same as previous frame. DO NOT flip. Character must face EXACTLY the same way.",
       ];
     case "Death":
       return [
-        "Death frame 1: body jolting from impact, still standing upright at full height, pain expression.",
-        "Death frame 2: knees starting to buckle, body bending forward, losing balance but still mostly vertical.",
-        "Death frame 3: collapsed onto knees, upper body hunched forward, head drooping down.",
-        "Death frame 4: slumped into a crumpled kneeling heap on the ground. NOT lying flat horizontal. Compact pose.",
+        "Death frame 1: body jolting from impact, still standing upright at full height. DO NOT flip or mirror.",
+        "Death frame 2: knees starting to buckle, body bending forward, losing balance. Character faces SAME direction as reference.",
+        "Death frame 3: collapsed onto knees, upper body hunched forward, head drooping down. Keep outfit details on the SAME side.",
+        "Death frame 4: slumped into a crumpled kneeling heap on the ground. Compact pose. DO NOT flip. Character must face EXACTLY the same way.",
       ];
     default:
       return [
-        `${animName} — starting pose, beginning of the action.`,
-        `${animName} — early progression, action building.`,
-        `${animName} — peak of the action, maximum expression.`,
-        `${animName} — finishing or recovery, action winding down.`,
+        `${animName} — starting pose, beginning of the action. DO NOT flip or mirror.`,
+        `${animName} — early progression, action building. Character faces SAME direction as reference.`,
+        `${animName} — peak of the action, maximum expression. Keep outfit details on the SAME side.`,
+        `${animName} — finishing or recovery, action winding down. DO NOT flip. Character must face EXACTLY the same way.`,
       ];
   }
 }
@@ -133,7 +122,7 @@ function getFrameDescriptions(animName: string, customPrompt?: string): string[]
 // ============================================================
 // SINGLE FRAME GENERATION — one API call per frame
 // ============================================================
-async function generateSingleFrame(
+async function generateSingleFrameObj(
   ai: ReturnType<typeof getAiClient>,
   base64Data: string,
   mimeType: string,
@@ -176,7 +165,7 @@ FINAL CHECK: Before outputting, verify the character faces the same direction as
 // ============================================================
 // COMBINE FRAMES — assemble 4 individual frames into a strip
 // ============================================================
-function combineFramesIntoStrip(frameDataUrls: string[]): Promise<string> {
+export function combineFramesIntoStrip(frameDataUrls: string[]): Promise<string> {
   return new Promise(async (resolve, reject) => {
     try {
       const images: HTMLImageElement[] = [];
@@ -225,7 +214,7 @@ export async function generateAnimationRow(
   animName: string,
   customPrompt?: string,
   onProgress?: (msg: string) => void,
-): Promise<string> {
+): Promise<AnimationRowResult> {
   const ai = getAiClient();
 
   // Extract base64 and mimetype from the reference image
@@ -242,7 +231,7 @@ export async function generateAnimationRow(
   for (let i = 0; i < 4; i++) {
     onProgress?.(`Generating ${animName} frame ${i + 1}/4...`);
 
-    const frameUrl = await generateSingleFrame(ai, base64Data, mimeType, frameDescs[i]);
+    const frameUrl = await generateSingleFrameObj(ai, base64Data, mimeType, frameDescs[i]);
 
     // Remove background from this individual frame immediately.
     // This is far more reliable than removing bg from the combined strip,
@@ -259,5 +248,28 @@ export async function generateAnimationRow(
 
   // Combine all 4 bg-removed frames into a horizontal strip (transparent gaps)
   onProgress?.(`Combining ${animName} frames into strip...`);
-  return combineFramesIntoStrip(frameDataUrls);
+  const rowUrl = await combineFramesIntoStrip(frameDataUrls);
+  return { rowUrl, framesUrls: frameDataUrls };
+}
+
+// ============================================================
+// REGENERATE SINGLE FRAME
+// ============================================================
+export async function regenerateSingleFrame(
+  baseCharImage: string,
+  animName: string,
+  customPrompt: string | undefined,
+  frameIndex: number,
+  onProgress?: (msg: string) => void
+): Promise<string> {
+  const ai = getAiClient();
+  const [mimeTypeStr, base64Data] = baseCharImage.split(';base64,');
+  const mimeType = mimeTypeStr.replace('data:', '');
+  const frameDescs = getFrameDescriptions(animName, customPrompt);
+  
+  onProgress?.(`Regenerating ${animName} frame ${frameIndex + 1}...`);
+  const frameUrl = await generateSingleFrameObj(ai, base64Data, mimeType, frameDescs[frameIndex]);
+  
+  onProgress?.(`Cleaning frame ${frameIndex + 1}...`);
+  return removeBackground(frameUrl, 70);
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { generateCharacter, generateAnimationRow, generateIdleRow } from './services/ai';
+import { generateCharacter, generateAnimationRow, AnimationRowResult, regenerateSingleFrame, combineFramesIntoStrip } from './services/ai';
 import { removeBackground } from './lib/imageUtils';
 import { compileSpriteSheet } from './lib/spriteCompiler';
 import { GameViewport } from './components/GameViewport';
@@ -27,10 +27,11 @@ export default function App() {
   const [baseCharImage, setBaseCharImage] = useState<string | null>(null);
   const [baseCharNoBg, setBaseCharNoBg] = useState<string | null>(null);
   
-  const [animRows, setAnimRows] = useState<(string | null)[]>(Array(7).fill(null));
+  const [animRows, setAnimRows] = useState<(AnimationRowResult | null)[]>(Array(7).fill(null));
   const [animRowsNoBg, setAnimRowsNoBg] = useState<(string | null)[]>(Array(7).fill(null));
   
   const [compiledSpriteSheet, setCompiledSpriteSheet] = useState<string | null>(null);
+  const [selectedFrame, setSelectedFrame] = useState<{rowIndex: number, frameIndex: number, url: string} | null>(null);
   
   const [isGenerating, setIsGenerating] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState('');
@@ -108,26 +109,57 @@ export default function App() {
     setLoadingMsg(`Generating ${animDef.name} animation...`);
     try {
       const sourceImage = baseCharNoBg || baseCharImage;
-      const isIdle = animDef.name.toLowerCase() === 'idle' && !animDef.customPrompt?.trim();
-      const b64 = isIdle
-        ? await generateIdleRow(sourceImage)
-        : await generateAnimationRow(sourceImage, animDef.name, animDef.customPrompt, (msg) => setLoadingMsg(msg));
+      const b64 = await generateAnimationRow(sourceImage, animDef.name, animDef.customPrompt, (msg) => setLoadingMsg(msg));
       
       const newRows = [...animRows];
       newRows[rowIndex] = b64;
       setAnimRows(newRows);
       
-      // BG removal: idle is already clean (code-generated), AI rows are pre-cleaned
-      // inside generateAnimationRow (per-frame removal before combining)
-      const noBg = b64;
-      
       const newRowsNoBg = [...animRowsNoBg];
-      newRowsNoBg[rowIndex] = noBg;
+      newRowsNoBg[rowIndex] = b64.rowUrl;
       setAnimRowsNoBg(newRowsNoBg);
       
-      // Auto compile
+      // Auto compile using the reference image to guarantee direction
       setLoadingMsg("Compiling Sprite Sheet...");
-      const compiled = await compileSpriteSheet(newRowsNoBg, 4);
+      const compiled = await compileSpriteSheet(newRowsNoBg, 4, baseCharNoBg || undefined);
+      setCompiledSpriteSheet(compiled);
+      
+    } catch (e) {
+      handleError(e);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleRegenerateSingleFrame = async (rowIndex: number, frameIndex: number) => {
+    if (!baseCharImage) return;
+    setIsGenerating(true);
+    setErrorMsg(null);
+    const animDef = animations[rowIndex];
+    setLoadingMsg(`Regenerating ${animDef.name} frame ${frameIndex + 1}...`);
+    try {
+      const sourceImage = baseCharNoBg || baseCharImage;
+      const newFrameUrl = await regenerateSingleFrame(sourceImage, animDef.name, animDef.customPrompt, frameIndex, (msg) => setLoadingMsg(msg));
+      
+      const newRows = [...animRows];
+      const row = newRows[rowIndex]!;
+      const newFramesUrls = [...row.framesUrls];
+      newFramesUrls[frameIndex] = newFrameUrl;
+      
+      setLoadingMsg("Recombining frames...");
+      const newRowUrl = await combineFramesIntoStrip(newFramesUrls);
+      
+      newRows[rowIndex] = { rowUrl: newRowUrl, framesUrls: newFramesUrls };
+      setAnimRows(newRows);
+      
+      const newRowsNoBg = [...animRowsNoBg];
+      newRowsNoBg[rowIndex] = newRowUrl;
+      setAnimRowsNoBg(newRowsNoBg);
+      
+      setSelectedFrame(prev => prev ? { ...prev, url: newFrameUrl } : null);
+      
+      setLoadingMsg("Compiling Sprite Sheet...");
+      const compiled = await compileSpriteSheet(newRowsNoBg, 4, baseCharNoBg || undefined);
       setCompiledSpriteSheet(compiled);
       
     } catch (e) {
@@ -152,17 +184,11 @@ export default function App() {
           const animDef = animations[i];
           setLoadingMsg(`Generating ${animDef.name} (${i + 1}/${animations.length})...`);
           
-          const isIdle = animDef.name.toLowerCase() === 'idle' && !animDef.customPrompt?.trim();
-          const b64 = isIdle
-            ? await generateIdleRow(sourceImage)
-            : await generateAnimationRow(sourceImage, animDef.name, animDef.customPrompt, (msg) => setLoadingMsg(msg));
+          const b64 = await generateAnimationRow(sourceImage, animDef.name, animDef.customPrompt, (msg) => setLoadingMsg(msg));
           currentRows[i] = b64;
           setAnimRows([...currentRows]);
           
-          // BG removal: idle is already clean, AI rows are pre-cleaned
-          // inside generateAnimationRow (per-frame removal before combining)
-          const noBg = b64;
-          currentRowsNoBg[i] = noBg;
+          currentRowsNoBg[i] = b64.rowUrl;
           setAnimRowsNoBg([...currentRowsNoBg]);
           
           // Brief cooldown between animations (frame-level cooldowns are built-in)
@@ -171,7 +197,7 @@ export default function App() {
       }
       
       setLoadingMsg("Compiling final Sprite Sheet...");
-      const compiled = await compileSpriteSheet(currentRowsNoBg, 4);
+      const compiled = await compileSpriteSheet(currentRowsNoBg, 4, baseCharNoBg || undefined);
       setCompiledSpriteSheet(compiled);
       
     } catch (e) {
@@ -190,7 +216,7 @@ export default function App() {
     setIsGenerating(true);
     setErrorMsg(null);
 
-    const currentRows: (string | null)[] = [];
+    const currentRows: (AnimationRowResult | null)[] = [];
     const currentRowsNoBg: (string | null)[] = [];
 
     try {
@@ -199,15 +225,11 @@ export default function App() {
         const animDef = animations[i];
         setLoadingMsg(`Re-generating ${animDef.name} (${i + 1}/${animations.length})...`);
 
-        const isIdle = animDef.name.toLowerCase() === 'idle' && !animDef.customPrompt?.trim();
-        const b64 = isIdle
-          ? await generateIdleRow(sourceImage)
-          : await generateAnimationRow(sourceImage, animDef.name, animDef.customPrompt, (msg) => setLoadingMsg(msg));
+        const b64 = await generateAnimationRow(sourceImage, animDef.name, animDef.customPrompt, (msg) => setLoadingMsg(msg));
         currentRows[i] = b64;
         setAnimRows([...currentRows]);
 
-        const noBg = b64;
-        currentRowsNoBg[i] = noBg;
+        currentRowsNoBg[i] = b64.rowUrl;
         setAnimRowsNoBg([...currentRowsNoBg]);
 
         // Brief cooldown between animations
@@ -215,7 +237,7 @@ export default function App() {
       }
 
       setLoadingMsg("Compiling final Sprite Sheet...");
-      const compiled = await compileSpriteSheet(currentRowsNoBg, 4);
+      const compiled = await compileSpriteSheet(currentRowsNoBg, 4, baseCharNoBg || undefined);
       setCompiledSpriteSheet(compiled);
 
     } catch (e) {
@@ -489,10 +511,19 @@ export default function App() {
                      </div>
                      
                      <div className="flex-1 w-full bg-[#0D0D0D] border-2 border-zinc-900 border-dashed h-24 relative overflow-hidden flex items-center justify-center bg-[url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYNgNwMjAH+hkhhGjGoCGMTIwyMCM+MvA8I+BgUFBwYGBgeEjI8M/EJoBj0QOQZzJ4C8AAAAASUVORK5CYII=')]">
-                       {animRowsNoBg[i] ? (
-                         <img src={animRowsNoBg[i]!} alt={animDef.name} className="h-full w-auto object-contain" style={{ imageRendering: 'pixelated' }} />
-                       ) : animRows[i] ? (
-                         <img src={animRows[i]!} alt={animDef.name} className="h-full w-auto object-contain" style={{ imageRendering: 'pixelated' }} />
+                       {animRows[i] ? (
+                          <div className="flex gap-2 sm:gap-4 h-full py-2">
+                            {animRows[i]!.framesUrls.map((fUrl, fIdx) => (
+                              <img 
+                                key={fIdx} 
+                                src={fUrl} 
+                                alt={`Frame ${fIdx+1}`} 
+                                className="h-full w-auto object-contain cursor-pointer hover:scale-110 transition-transform" 
+                                style={{ imageRendering: 'pixelated' }} 
+                                onClick={() => setSelectedFrame({ rowIndex: i, frameIndex: fIdx, url: fUrl })}
+                              />
+                            ))}
+                          </div>
                        ) : (
                          <span className="text-zinc-700 font-mono text-xs uppercase">No Data</span>
                        )}
@@ -689,6 +720,31 @@ export default function App() {
               <p className="font-mono text-sm text-zinc-400">{loadingMsg}</p>
            </div>
          </div>
+      )}
+
+      {selectedFrame && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 animate-in fade-in" onClick={() => !isGenerating && setSelectedFrame(null)}>
+           <div className="bg-[#161616] border-4 border-zinc-800 p-6 max-w-xl w-full flex flex-col gap-6" onClick={e => e.stopPropagation()}>
+              <div className="flex justify-between items-center">
+                 <h3 className="font-black uppercase tracking-widest text-xl text-[#BDFF00]">
+                    {animations[selectedFrame.rowIndex].name} - Frame {selectedFrame.frameIndex + 1}
+                 </h3>
+                 <button onClick={() => setSelectedFrame(null)} disabled={isGenerating} className="text-zinc-500 hover:text-white"><XCircle /></button>
+              </div>
+              <div className="w-full aspect-square bg-[#0D0D0D] border-2 border-zinc-800 bg-[url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYNgNwMjAH+hkhhGjGoCGMTIwyMCM+MvA8I+BgUFBwYGBgeEjI8M/EJoBj0QOQZzJ4C8AAAAASUVORK5CYII=')] flex items-center justify-center">
+                 <img src={selectedFrame.url} alt="Frame Zoom" className="w-full h-full object-contain" style={{ imageRendering: 'pixelated' }} />
+              </div>
+              <div className="flex gap-4 justify-end">
+                 <button 
+                    onClick={() => handleRegenerateSingleFrame(selectedFrame.rowIndex, selectedFrame.frameIndex)}
+                    disabled={isGenerating}
+                    className="bg-[#E0E0E0] text-black font-black uppercase tracking-widest px-6 py-3 border-2 border-transparent hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed"
+                 >
+                    {isGenerating ? 'Regenerating...' : 'Regenerate This Frame'}
+                 </button>
+              </div>
+           </div>
+        </div>
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-export async function compileSpriteSheet(rowImagesBase64: (string | null)[], framesPerRow = 4): Promise<string> {
+export async function compileSpriteSheet(rowImagesBase64: (string | null)[], framesPerRow = 4, referenceImageBase64?: string): Promise<string> {
   const images: HTMLImageElement[] = [];
   
   for (let i = 0; i < rowImagesBase64.length; i++) {
@@ -239,18 +239,44 @@ export async function compileSpriteSheet(rowImagesBase64: (string | null)[], fra
   const colorDist = (r1: number, g1: number, b1: number, r2: number, g2: number, b2: number) =>
       Math.abs(r1 - r2) + Math.abs(g1 - g2) + Math.abs(b1 - b2);
 
+  // Use Row 0, Frame 0 (Idle, guaranteed correct direction) or the explicitly provided reference image as the absolute truth
+  let globalRefSig: ReturnType<typeof getColorSignature> = null;
+  let globalRefAsymmetry = 0;
+
+  if (referenceImageBase64) {
+      const refImg = new Image();
+      await new Promise((res, rej) => {
+          refImg.onload = res;
+          refImg.onerror = rej;
+          refImg.src = referenceImageBase64;
+      });
+      const refCanvas = document.createElement('canvas');
+      refCanvas.width = refImg.width;
+      refCanvas.height = refImg.height;
+      const refCtx = refCanvas.getContext('2d')!;
+      refCtx.drawImage(refImg, 0, 0);
+      globalRefSig = getColorSignature(refCanvas);
+  } else if (extractedRows.length > 0 && extractedRows[0].length > 0) {
+      globalRefSig = getColorSignature(extractedRows[0][0].canvas);
+  }
+
+  if (globalRefSig) {
+      globalRefAsymmetry = colorDist(globalRefSig.lR, globalRefSig.lG, globalRefSig.lB, globalRefSig.rR, globalRefSig.rG, globalRefSig.rB);
+  }
+
   for (let i = 0; i < extractedRows.length; i++) {
       const frames = extractedRows[i];
-      if (frames.length < 2) continue;
+      if (frames.length === 0) continue;
 
-      const refSig = getColorSignature(frames[0].canvas);
+      // Fallback to local frame 0 if global ref is perfectly symmetric (rare) or missing
+      const refSig = (globalRefAsymmetry >= 15) ? globalRefSig! : getColorSignature(frames[0].canvas);
       if (!refSig) continue;
 
-      // Check if frame 0 itself has meaningful left/right color asymmetry
       const refAsymmetry = colorDist(refSig.lR, refSig.lG, refSig.lB, refSig.rR, refSig.rG, refSig.rB);
       if (refAsymmetry < 15) continue; // Too symmetric to detect flips reliably
 
-      for (let f = 1; f < frames.length; f++) {
+      // Check ALL frames in the row, including frame 0, because the entire row might have been generated backwards
+      for (let f = 0; f < frames.length; f++) {
           const sig = getColorSignature(frames[f].canvas);
           if (!sig) continue;
 
