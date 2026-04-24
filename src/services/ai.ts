@@ -10,15 +10,93 @@ const getAiClient = () => {
   return new GoogleGenAI({ apiKey: key });
 };
 
-export async function generateCharacter(prompt: string): Promise<string> {
+export type ArtStyle = 'pixel' | 'detailed-pixel' | 'chibi' | 'vector-flat' | 'retro-8bit';
+
+export type Perspective = 'platformer' | 'isometric' | 'top-down';
+
+export const PERSPECTIVES: { id: Perspective; label: string; desc: string; popular?: boolean }[] = [
+  { id: 'platformer', label: 'Platformer', desc: 'Side view', popular: true },
+  { id: 'isometric', label: 'Isometric', desc: '3/4 angled view' },
+  { id: 'top-down', label: 'Top-Down', desc: 'Bird\'s eye view' },
+];
+
+function getPerspectiveRules(p: Perspective): string {
+  switch (p) {
+    case 'isometric':
+      return '- Isometric 3/4 view. Character body angled slightly to the right, facing RIGHT. Camera is elevated at ~30 degrees looking down. Character MUST face to the RIGHT side of the image.';
+    case 'top-down':
+      return '- Top-down bird\'s eye view looking straight down. Character seen from directly above, head visible, foreshortened body. Character MUST be oriented facing toward the RIGHT side of the image.';
+    default:
+      return '- 3/4 front-facing view angled slightly to the right. Character MUST face to the RIGHT side of the image. Platformer perspective.';
+  }
+}
+
+export const ART_STYLES: { id: ArtStyle; label: string; desc: string }[] = [
+  { id: 'pixel', label: 'Pixel Art', desc: '64x64, 16 colors' },
+  { id: 'detailed-pixel', label: 'Detailed Pixel', desc: '128x128, richer palette' },
+  { id: 'chibi', label: 'Chibi', desc: 'Cute super-deformed' },
+  { id: 'vector-flat', label: 'Vector Flat', desc: 'Clean flat illustration' },
+  { id: 'retro-8bit', label: 'Retro 8-bit', desc: 'NES-era low-res' },
+];
+
+function getStyleRules(style: ArtStyle): string {
+  switch (style) {
+    case 'detailed-pixel':
+      return `RENDERING TECHNIQUE: Pixel art on a 128x128 pixel canvas.
+- Every pixel must be a deliberate square dot — no anti-aliasing, no sub-pixel blending, no smooth gradients.
+- Color palette: exactly 32 flat colors maximum. Each color is a single solid hex value with no transparency blending.
+- Black (#000000) 1-pixel outline around the entire character silhouette and major body parts.
+- Shading: use 2-3 shades per base color (light/mid/dark), placed as hard pixel steps — never smooth gradients.
+- No dithering patterns. No blur. No glow effects. Every pixel edge is a hard 90-degree step.`;
+    case 'chibi':
+      return `RENDERING TECHNIQUE: Chibi / super-deformed character on a 96x96 pixel canvas.
+- Head is exactly 1/2 of total body height. Eyes are large circles taking up 1/3 of the face.
+- Body is stubby: short torso, tiny arms and legs, simplified mitten-like hands, round feet.
+- Cel-shaded coloring: each surface has exactly 2 tones (base + shadow), hard edge between them, no gradient.
+- Black (#000000) 2-pixel outline around the full silhouette. 1-pixel inner lines for details.
+- Vibrant saturated colors. No dithering, no anti-aliasing, no pixel-level noise.
+- Every pixel must be a deliberate square dot with hard edges.`;
+    case 'vector-flat':
+      return `RENDERING TECHNIQUE: Flat vector-style 2D illustration on a 128x128 canvas.
+- Bold uniform black outline (2-3 pixels thick) around the entire character and all major shapes.
+- Solid flat color fills only — zero gradients, zero shading, zero texture. Each shape is ONE solid color.
+- Maximum 12 distinct flat colors. No dithering, no noise, no anti-aliasing on edges.
+- Geometric simplified shapes: circles, ovals, rectangles. Minimal anatomical detail.
+- Clean hard edges everywhere. Style similar to a vector SVG icon rendered at low resolution.
+- No pixel-art grid visible — shapes should have smooth curves made of clean anti-aliased edges.`;
+    case 'retro-8bit':
+      return `RENDERING TECHNIQUE: NES-era 8-bit pixel art on a strict 32x32 pixel canvas.
+- EXTREMELY low resolution: the character must fit in 32x32 pixels. Each pixel is large and chunky.
+- Color palette: MAXIMUM 4 colors plus transparency. Choose 4 colors and use ONLY those 4.
+- No outline — or at most 1-pixel dark border. No anti-aliasing. No sub-pixel rendering.
+- Shapes are very blocky and simplified: square head, rectangular body, stick-like limbs.
+- No shading, no gradients, no dithering. Every pixel is one of the 4 chosen flat colors.
+- The character should look like it belongs on an original 1985 Nintendo NES game.
+- Minimal detail: facial features are 1-2 pixels each. Hands and feet are single pixel blocks.`;
+    default:
+      return `RENDERING TECHNIQUE: Classic pixel art on a 64x64 pixel canvas.
+- Every pixel must be a deliberate square dot — no anti-aliasing, no smooth edges, no blur.
+- Color palette: exactly 16 flat colors maximum. Each color is a single solid hex value.
+- Black (#000000) 1-pixel outline around the entire character silhouette.
+- No dithering, no gradients, no glow, no transparency blending.
+- Shading: maximum 2 shades per base color, placed as hard pixel blocks.
+- Clean retro game sprite aesthetic. Every edge is a hard 90-degree pixel step.`;
+  }
+}
+
+export async function generateCharacter(prompt: string, style: ArtStyle = 'pixel', perspective: Perspective = 'platformer'): Promise<string> {
   const ai = getAiClient();
-  const finalPrompt = `A single 2D pixel art game character: ${prompt}.
-Style rules:
-- Clean pixel art, 64x64 pixel scale, black 1px outline around the character.
-- Limited color palette (max 16 colors), no dithering, no anti-aliasing.
-- 3/4 front-facing view angled slightly to the right. Neutral idle stance with arms relaxed at sides.
-- Entire character visible head to toe, vertically centered with padding on all sides.
-- Background is solid flat #00FF00 green. No shadows, no ground line, no effects.`;
+  const finalPrompt = `${getStyleRules(style)}
+
+SUBJECT: A single 2D game character sprite: ${prompt}.
+
+VIEW: ${getPerspectiveRules(perspective)}
+
+COMPOSITION RULES:
+- Neutral idle stance with arms relaxed at sides.
+- Entire character visible head to toe, vertically centered with equal padding on all sides.
+- Background is solid flat #00FF00 green. Every background pixel must be exactly #00FF00. Character MUST have a clear black (#000000) 1px outline separating it from the background. No anti-aliasing between character outline and background. CRITICAL: NO shadow blob under the character's feet. NO ground circle. NO glow. NO darker-green area anywhere touching the character. The area directly below the character's feet must be the EXACT same #00FF00 as the rest of the background.
+- Output exactly ONE character, nothing else in the image.`;
   
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
@@ -37,6 +115,78 @@ Style rules:
     }
   }
   throw new Error("No image generated.");
+}
+
+export interface BatchCharResult { name: string; dataUrl: string }
+
+/**
+ * Generate multiple characters sequentially, passing previously generated
+ * images as style/universe reference so AI keeps them consistent.
+ */
+export async function generateCharacterBatch(
+  names: string[],
+  context: string,
+  style: ArtStyle,
+  perspective: Perspective,
+  onProgress?: (msg: string, results: BatchCharResult[]) => void,
+): Promise<BatchCharResult[]> {
+  const ai = getAiClient();
+  const results: BatchCharResult[] = [];
+
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i];
+    onProgress?.(`Generating ${name} (${i + 1}/${names.length})...`, results);
+
+    // Build parts: previous character images as reference + text prompt
+    const parts: any[] = [];
+
+    // Attach up to 3 most recent generated characters as style reference
+    const refs = results.slice(-3);
+    refs.forEach((ref, idx) => {
+      const [mimeStr, b64] = ref.dataUrl.split(';base64,');
+      const mimeType = mimeStr.replace('data:', '');
+      parts.push({ inlineData: { data: b64, mimeType } });
+      parts.push({ text: `- Image ${idx + 1}: Previously generated character "${ref.name}" from the same set. Use as style reference.` });
+    });
+
+    const charPrompt = context
+      ? `${name} from ${context}`
+      : name;
+
+    parts.push({ text: `${getStyleRules(style)}
+
+SUBJECT: A single 2D game character sprite: ${charPrompt}.
+${refs.length > 0 ? `\nSTYLE REFERENCE: Match the EXACT same rendering technique, pixel size, color palette density, outline thickness, and proportions as the reference image(s) above. The characters belong to the same set and must look like they were drawn by the same artist.` : ''}
+
+VIEW: ${getPerspectiveRules(perspective)}
+
+COMPOSITION RULES:
+- Neutral idle stance with arms relaxed at sides.
+- Entire character visible head to toe, vertically centered with equal padding on all sides.
+- Background is solid flat #00FF00 green. Every background pixel must be exactly #00FF00. Character MUST have a clear black (#000000) 1px outline separating it from the background. No anti-aliasing between character outline and background. CRITICAL: NO shadow blob under the character's feet. NO ground circle. NO glow. NO darker-green area anywhere touching the character. The area directly below the character's feet must be the EXACT same #00FF00 as the rest of the background.
+- Output exactly ONE character, nothing else in the image.` });
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: { parts },
+    });
+
+    let dataUrl: string | null = null;
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData) {
+        dataUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        break;
+      }
+    }
+    if (!dataUrl) throw new Error(`No image generated for "${name}".`);
+
+    results.push({ name, dataUrl });
+
+    // Cooldown between API calls
+    if (i < names.length - 1) await new Promise(r => setTimeout(r, 2000));
+  }
+
+  return results;
 }
 
 export interface AnimationRowResult {
@@ -127,22 +277,27 @@ async function generateSingleFrameObj(
   base64Data: string,
   mimeType: string,
   poseDescription: string,
+  style: ArtStyle = 'pixel',
+  perspective: Perspective = 'platformer',
 ): Promise<string> {
-  const prompt = `Look at the reference character image carefully. Generate this EXACT SAME character in a new pose.
+  const prompt = `- Image 1: Reference character sprite. Match this EXACTLY.
+
+${getStyleRules(style)}
 
 MANDATORY RULES:
-1. Draw EXACTLY ONE character — the same character from the reference.
-2. The character MUST face the EXACT SAME direction as the reference image. If reference faces right, this pose faces right. If reference faces left, this pose faces left. NEVER flip or mirror.
-3. Use the EXACT same pixel art style, pixel scale, proportions, body size, colors, and outfit.
-4. All outfit details, accessories, and color patterns must stay on the SAME SIDE as in the reference. If a stripe or accessory is on the character's left side in the reference, it must remain on the left side.
-5. Background must be solid flat #00FF00 green. No gradients, no shadows, no effects, no sparkles, no text, no ground line.
+1. Draw EXACTLY ONE character — the same character from the reference image.
+2. The character MUST face the EXACT SAME direction as the reference. NEVER flip or mirror.
+3. Match the EXACT same rendering technique, pixel size, color palette, proportions, body size, colors, and outfit from the reference.
+4. All outfit details, accessories, and color patterns must stay on the SAME SIDE as in the reference.
+5. Background must be solid flat #00FF00 green. Character MUST have a clear black 1px outline. No anti-aliasing at edges. NO shadow blob under feet. NO ground circle. NO darker-green area anywhere. No gradients, no shadows, no effects, no text, no ground line.
 6. Character must be fully visible head to toe, centered with padding.
-7. Do NOT shrink or enlarge the character compared to the reference.
+7. Do NOT change the character's size compared to the reference.
+${getPerspectiveRules(perspective)}
 
 POSE TO DRAW:
 ${poseDescription}
 
-FINAL CHECK: Before outputting, verify the character faces the same direction as the reference and outfit details are on the correct sides. If anything is mirrored, fix it.`;
+FINAL CHECK: Verify the character uses the identical rendering technique and color palette as the reference. Verify facing direction matches. If anything differs, fix it.`;
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
@@ -214,6 +369,8 @@ export async function generateAnimationRow(
   animName: string,
   customPrompt?: string,
   onProgress?: (msg: string) => void,
+  style: ArtStyle = 'pixel',
+  perspective: Perspective = 'platformer',
 ): Promise<AnimationRowResult> {
   const ai = getAiClient();
 
@@ -231,7 +388,7 @@ export async function generateAnimationRow(
   for (let i = 0; i < 4; i++) {
     onProgress?.(`Generating ${animName} frame ${i + 1}/4...`);
 
-    const frameUrl = await generateSingleFrameObj(ai, base64Data, mimeType, frameDescs[i]);
+    const frameUrl = await generateSingleFrameObj(ai, base64Data, mimeType, frameDescs[i], style, perspective);
 
     // Remove background from this individual frame immediately.
     // This is far more reliable than removing bg from the combined strip,
@@ -260,7 +417,9 @@ export async function regenerateSingleFrame(
   animName: string,
   customPrompt: string | undefined,
   frameIndex: number,
-  onProgress?: (msg: string) => void
+  onProgress?: (msg: string) => void,
+  style: ArtStyle = 'pixel',
+  perspective: Perspective = 'platformer',
 ): Promise<string> {
   const ai = getAiClient();
   const [mimeTypeStr, base64Data] = baseCharImage.split(';base64,');
@@ -268,7 +427,7 @@ export async function regenerateSingleFrame(
   const frameDescs = getFrameDescriptions(animName, customPrompt);
   
   onProgress?.(`Regenerating ${animName} frame ${frameIndex + 1}...`);
-  const frameUrl = await generateSingleFrameObj(ai, base64Data, mimeType, frameDescs[frameIndex]);
+  const frameUrl = await generateSingleFrameObj(ai, base64Data, mimeType, frameDescs[frameIndex], style, perspective);
   
   onProgress?.(`Cleaning frame ${frameIndex + 1}...`);
   return removeBackground(frameUrl, 70);
