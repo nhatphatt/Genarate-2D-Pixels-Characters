@@ -39,6 +39,24 @@ export const ART_STYLES: { id: ArtStyle; label: string; desc: string }[] = [
   { id: 'retro-8bit', label: 'Retro 8-bit', desc: 'NES-era low-res' },
 ];
 
+// ============================================================
+// NO-SHADOW RULE — applied to EVERY generation prompt without exception.
+// Distinguishes between INTERNAL body shading (allowed) and any form of
+// cast/ground/contact/drop shadow on the background (FORBIDDEN).
+// ============================================================
+const NO_SHADOW_RULE = `ABSOLUTELY FORBIDDEN — ZERO SHADOWS ON BACKGROUND (NON-NEGOTIABLE):
+- NO cast shadow under or around the character. NO drop shadow. NO contact shadow. NO ground shadow.
+- NO shadow blob, NO shadow puddle, NO oval shadow, NO circular shadow disc beneath the feet.
+- NO ambient occlusion darkening the area around the character.
+- NO ground patch, NO dirt patch, NO grass tuft, NO rock, NO platform, NO floor tile, NO terrain of any kind under the feet.
+- NO darker green, NO lighter green, NO yellow-green, NO blue-green pixels touching or near the character — ONLY pure #00FF00.
+- NO glow, NO aura, NO halo, NO outline-glow, NO bloom, NO vignette, NO rim light spilling onto the background.
+- NO motion blur trail, NO speed lines, NO dust cloud, NO smoke, NO particles on the background.
+- The character appears to FLOAT on a perfectly uniform #00FF00 field with absolutely nothing else in the image.
+- Internal body shading (shading ON the character's own skin/clothes/armor) is ALLOWED and expected. But shading must NEVER extend off the character silhouette onto the background.
+- The pixel directly below the character's feet, and every pixel within a 30-pixel radius around the character, MUST be exactly #00FF00 — identical to the rest of the background.
+- If you are tempted to add a shadow "for grounding the character" — DO NOT. The character must look like it is hovering in pure green void.`;
+
 function getStyleRules(style: ArtStyle): string {
   switch (style) {
     case 'detailed-pixel':
@@ -46,13 +64,13 @@ function getStyleRules(style: ArtStyle): string {
 - Every pixel must be a deliberate square dot — no anti-aliasing, no sub-pixel blending, no smooth gradients.
 - Color palette: exactly 32 flat colors maximum. Each color is a single solid hex value with no transparency blending.
 - Black (#000000) 1-pixel outline around the entire character silhouette and major body parts.
-- Shading: use 2-3 shades per base color (light/mid/dark), placed as hard pixel steps — never smooth gradients.
+- Shading: use 2-3 shades per base color (light/mid/dark) ON THE CHARACTER'S BODY ONLY, placed as hard pixel steps — never smooth gradients. Background remains pure #00FF00 with no shading.
 - No dithering patterns. No blur. No glow effects. Every pixel edge is a hard 90-degree step.`;
     case 'chibi':
       return `RENDERING TECHNIQUE: Chibi / super-deformed character on a 96x96 pixel canvas.
 - Head is exactly 1/2 of total body height. Eyes are large circles taking up 1/3 of the face.
 - Body is stubby: short torso, tiny arms and legs, simplified mitten-like hands, round feet.
-- Cel-shaded coloring: each surface has exactly 2 tones (base + shadow), hard edge between them, no gradient.
+- Cel-shaded coloring: each surface OF THE CHARACTER has exactly 2 tones (base + shadow), hard edge between them, no gradient. Background remains pure #00FF00 with no shading.
 - Black (#000000) 2-pixel outline around the full silhouette. 1-pixel inner lines for details.
 - Vibrant saturated colors. No dithering, no anti-aliasing, no pixel-level noise.
 - Every pixel must be a deliberate square dot with hard edges.`;
@@ -79,14 +97,16 @@ function getStyleRules(style: ArtStyle): string {
 - Color palette: exactly 16 flat colors maximum. Each color is a single solid hex value.
 - Black (#000000) 1-pixel outline around the entire character silhouette.
 - No dithering, no gradients, no glow, no transparency blending.
-- Shading: maximum 2 shades per base color, placed as hard pixel blocks.
+- Shading: maximum 2 shades per base color ON THE CHARACTER'S BODY ONLY, placed as hard pixel blocks. Background remains pure #00FF00 with no shading.
 - Clean retro game sprite aesthetic. Every edge is a hard 90-degree pixel step.`;
   }
 }
 
 export async function generateCharacter(prompt: string, style: ArtStyle = 'pixel', perspective: Perspective = 'platformer'): Promise<string> {
   const ai = getAiClient();
-  const finalPrompt = `${getStyleRules(style)}
+  const finalPrompt = `${NO_SHADOW_RULE}
+
+${getStyleRules(style)}
 
 SUBJECT: A single 2D game character sprite: ${prompt}.
 
@@ -95,8 +115,9 @@ VIEW: ${getPerspectiveRules(perspective)}
 COMPOSITION RULES:
 - Neutral idle stance with arms relaxed at sides.
 - Entire character visible head to toe, vertically centered with equal padding on all sides.
-- Background is solid flat #00FF00 green. Every background pixel must be exactly #00FF00. Character MUST have a clear black (#000000) 1px outline separating it from the background. No anti-aliasing between character outline and background. CRITICAL: NO shadow blob under the character's feet. NO ground circle. NO glow. NO darker-green area anywhere touching the character. The area directly below the character's feet must be the EXACT same #00FF00 as the rest of the background.
-- Output exactly ONE character, nothing else in the image.`;
+- Background is solid flat #00FF00 green. Every background pixel must be exactly #00FF00. Character MUST have a clear black (#000000) 1px outline separating it from the background. No anti-aliasing between character outline and background.
+- Output exactly ONE character, nothing else in the image.
+- RE-READ the FORBIDDEN list above before drawing. If the image contains ANY shadow, ground patch, glow, or non-#00FF00 pixel touching the character, the output is INVALID.`;
   
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
@@ -153,18 +174,21 @@ export async function generateCharacterBatch(
       ? `${name} from ${context}`
       : name;
 
-    parts.push({ text: `${getStyleRules(style)}
+    parts.push({ text: `${NO_SHADOW_RULE}
+
+${getStyleRules(style)}
 
 SUBJECT: A single 2D game character sprite: ${charPrompt}.
-${refs.length > 0 ? `\nSTYLE REFERENCE: Match the EXACT same rendering technique, pixel size, color palette density, outline thickness, and proportions as the reference image(s) above. The characters belong to the same set and must look like they were drawn by the same artist.` : ''}
+${refs.length > 0 ? `\nSTYLE REFERENCE: Match the EXACT same rendering technique, pixel size, color palette density, outline thickness, and proportions as the reference image(s) above. The characters belong to the same set and must look like they were drawn by the same artist. IMPORTANT: even if the reference images contain shadows under feet (they should not), you MUST NOT replicate them — follow the FORBIDDEN list at the top.` : ''}
 
 VIEW: ${getPerspectiveRules(perspective)}
 
 COMPOSITION RULES:
 - Neutral idle stance with arms relaxed at sides.
 - Entire character visible head to toe, vertically centered with equal padding on all sides.
-- Background is solid flat #00FF00 green. Every background pixel must be exactly #00FF00. Character MUST have a clear black (#000000) 1px outline separating it from the background. No anti-aliasing between character outline and background. CRITICAL: NO shadow blob under the character's feet. NO ground circle. NO glow. NO darker-green area anywhere touching the character. The area directly below the character's feet must be the EXACT same #00FF00 as the rest of the background.
-- Output exactly ONE character, nothing else in the image.` });
+- Background is solid flat #00FF00 green. Every background pixel must be exactly #00FF00. Character MUST have a clear black (#000000) 1px outline separating it from the background. No anti-aliasing between character outline and background.
+- Output exactly ONE character, nothing else in the image.
+- RE-READ the FORBIDDEN list above before drawing. If the image contains ANY shadow, ground patch, glow, or non-#00FF00 pixel touching the character, the output is INVALID.` });
 
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
@@ -282,6 +306,8 @@ async function generateSingleFrameObj(
 ): Promise<string> {
   const prompt = `- Image 1: Reference character sprite. Match this EXACTLY.
 
+${NO_SHADOW_RULE}
+
 ${getStyleRules(style)}
 
 MANDATORY RULES:
@@ -289,7 +315,7 @@ MANDATORY RULES:
 2. The character MUST face the EXACT SAME direction as the reference. NEVER flip or mirror.
 3. Match the EXACT same rendering technique, pixel size, color palette, proportions, body size, colors, and outfit from the reference.
 4. All outfit details, accessories, and color patterns must stay on the SAME SIDE as in the reference.
-5. Background must be solid flat #00FF00 green. Character MUST have a clear black 1px outline. No anti-aliasing at edges. NO shadow blob under feet. NO ground circle. NO darker-green area anywhere. No gradients, no shadows, no effects, no text, no ground line.
+5. Background must be solid flat #00FF00 green. Character MUST have a clear black 1px outline. No anti-aliasing at edges. No gradients, no text, no ground line. (See FORBIDDEN list above for the full no-shadow rules — this applies to EVERY frame.)
 6. Character must be fully visible head to toe, centered with padding.
 7. Do NOT change the character's size compared to the reference.
 ${getPerspectiveRules(perspective)}
@@ -297,7 +323,7 @@ ${getPerspectiveRules(perspective)}
 POSE TO DRAW:
 ${poseDescription}
 
-FINAL CHECK: Verify the character uses the identical rendering technique and color palette as the reference. Verify facing direction matches. If anything differs, fix it.`;
+FINAL CHECK: Verify the character uses the identical rendering technique and color palette as the reference. Verify facing direction matches. Verify the area beneath the feet is pure #00FF00 with NO shadow, NO ground, NO contact patch. If anything differs or any forbidden element is present, fix it.`;
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',

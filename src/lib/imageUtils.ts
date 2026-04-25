@@ -261,6 +261,272 @@ export async function removeBackground(dataUrl: string, _tolerance: number = 55)
                 }
             }
 
+            // =========================================================
+            // Step 6: Enclosed-region (hole) removal
+            // Flood fill from removed pixels using 4-connectivity to find
+            // all "outside" pixels reachable from the image edge through
+            // already-removed regions. Any non-removed pixel that is NOT
+            // reachable from outside is by definition surrounded by either
+            // character outline or other removed pixels — i.e. a hole
+            // between arm/torso, between legs, etc.
+            //
+            // For each enclosed region:
+            //   - If small (< 8% of image) AND average distFromBg < 220
+            //     => it's bg leaking through outline gaps OR a green shadow
+            //        trapped under feet -> remove it.
+            //   - If large => it's a legitimate body cavity; leave alone.
+            //
+            // This fixes:
+            //   A) Green shadow patch under character feet (Naruto sandals)
+            //   B) Green/dark gap between arm and torso
+            //   C) Any background-colored region trapped inside silhouette
+            // =========================================================
+            const outsideReachable = new Uint8Array(w * h);
+            const outsideStack: number[] = [];
+            // Seed from every removed pixel on the image border
+            for (let x = 0; x < w; x++) {
+                const top = x;
+                const bot = (h - 1) * w + x;
+                if (removed[top]) { outsideReachable[top] = 1; outsideStack.push(top); }
+                if (removed[bot]) { outsideReachable[bot] = 1; outsideStack.push(bot); }
+            }
+            for (let y = 0; y < h; y++) {
+                const left = y * w;
+                const right = y * w + (w - 1);
+                if (removed[left]) { outsideReachable[left] = 1; outsideStack.push(left); }
+                if (removed[right]) { outsideReachable[right] = 1; outsideStack.push(right); }
+            }
+            // Flood through removed pixels (4-connectivity)
+            while (outsideStack.length > 0) {
+                const v = outsideStack.pop()!;
+                const cx = v % w, cy = (v / w) | 0;
+                const neighbors = [
+                    cx > 0 ? v - 1 : -1,
+                    cx < w - 1 ? v + 1 : -1,
+                    cy > 0 ? v - w : -1,
+                    cy < h - 1 ? v + w : -1,
+                ];
+                for (const ni of neighbors) {
+                    if (ni < 0) continue;
+                    if (outsideReachable[ni]) continue;
+                    if (!removed[ni]) continue;
+                    outsideReachable[ni] = 1;
+                    outsideStack.push(ni);
+                }
+            }
+
+            // Now find enclosed regions: non-removed pixels not reachable from outside
+            const regionVisited = new Uint8Array(w * h);
+            const MAX_HOLE_SIZE = Math.round(w * h * 0.08);
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const start = y * w + x;
+                    if (regionVisited[start] || removed[start]) continue;
+
+                    // BFS to find all connected non-removed pixels (4-connectivity)
+                    const cluster: number[] = [];
+                    const q: number[] = [start];
+                    regionVisited[start] = 1;
+                    let touchesOutside = false;
+                    let distSum = 0;
+                    while (q.length > 0) {
+                        const v = q.shift()!;
+                        cluster.push(v);
+                        distSum += distFromBg(v * 4);
+                        const cx = v % w, cy = (v / w) | 0;
+                        const neighbors = [
+                            cx > 0 ? v - 1 : -1,
+                            cx < w - 1 ? v + 1 : -1,
+                            cy > 0 ? v - w : -1,
+                            cy < h - 1 ? v + w : -1,
+                        ];
+                        for (const ni of neighbors) {
+                            if (ni < 0) {
+                                // touches image border — counts as outside
+                                touchesOutside = true;
+                                continue;
+                            }
+                            if (removed[ni]) {
+                                // touches a removed pixel — outside iff that pixel reachable from edge
+                                if (outsideReachable[ni]) touchesOutside = true;
+                                continue;
+                            }
+                            if (regionVisited[ni]) continue;
+                            regionVisited[ni] = 1;
+                            q.push(ni);
+                        }
+                    }
+
+                    // If this region touches outside, it's part of the main character — skip.
+                    if (touchesOutside) continue;
+                    // Enclosed region. Decide whether to remove.
+                    const avgDist = distSum / cluster.length;
+                    // Size guard: only kill small/medium enclosed regions.
+                    // Color guard: skip if region is clearly far from bg color
+                    //   (e.g. an inner colored detail that happens to be a fully-enclosed
+                    //   eye/jewel — extremely rare since outline usually breaks somewhere).
+                    if (cluster.length <= MAX_HOLE_SIZE && avgDist < 260) {
+                        for (const v of cluster) {
+                            removed[v] = 1;
+                            data[v * 4 + 3] = 0;
+                        }
+                    }
+                }
+            }
+
+            // =========================================================
+            // Step 7: Aggressive ground-shadow sweep at bottom strip
+            // AI repeatedly draws a green-tinted ground patch under feet
+            // even with strict prompts. The patch survives earlier stages
+            // when its color is just barely outside SHADOW range.
+            //
+            // Strategy: in the bottom 30% of image, find any non-removed
+            // cluster where green dominates (G > R AND G > B) AND the
+            // cluster is small (< 5% image). Remove it regardless of
+            // exact distance — character bodies in this zone are feet
+            // (skin/boots) which have R or B dominant, not G.
+            // =========================================================
+            const bottomStartY = Math.floor(h * 0.7);
+            const greenSweepVisited = new Uint8Array(w * h);
+            const MAX_GROUND_PATCH = Math.round(w * h * 0.05);
+            const isGreenDominant = (i: number): boolean => {
+                if (data[i + 3] === 0) return false;
+                const r = data[i], g = data[i + 1], b = data[i + 2];
+                // Must be clearly green-leaning, not greyish
+                if (g <= r + 8) return false;
+                if (g <= b + 8) return false;
+                // Skip very dark or very bright pixels (likely outline / highlight, not shadow)
+                if (g < 40) return false;
+                return true;
+            };
+
+            for (let y = bottomStartY; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const start = y * w + x;
+                    if (greenSweepVisited[start] || removed[start]) continue;
+                    if (!isGreenDominant(start * 4)) continue;
+
+                    const cluster: number[] = [];
+                    const q: number[] = [start];
+                    greenSweepVisited[start] = 1;
+                    let touchesRemoved = false;
+                    while (q.length > 0) {
+                        const v = q.shift()!;
+                        cluster.push(v);
+                        const cx = v % w, cy = (v / w) | 0;
+                        for (let dy = -1; dy <= 1; dy++)
+                            for (let dx = -1; dx <= 1; dx++) {
+                                if (!dx && !dy) continue;
+                                const nx = cx + dx, ny = cy + dy;
+                                if (nx < 0 || nx >= w || ny < 0 || ny >= h) {
+                                    touchesRemoved = true;
+                                    continue;
+                                }
+                                const ni = ny * w + nx;
+                                if (removed[ni]) { touchesRemoved = true; continue; }
+                                if (greenSweepVisited[ni]) continue;
+                                if (isGreenDominant(ni * 4)) {
+                                    greenSweepVisited[ni] = 1;
+                                    q.push(ni);
+                                }
+                            }
+                    }
+
+                    // Only kill if cluster is small AND touches the outside (transparent area).
+                    // This guarantees we never eat a green detail trapped inside the character body.
+                    if (cluster.length < MAX_GROUND_PATCH && touchesRemoved) {
+                        for (const v of cluster) {
+                            removed[v] = 1;
+                            data[v * 4 + 3] = 0;
+                        }
+                    }
+                }
+            }
+
+            // =========================================================
+            // Step 8: Connectivity-based pure-chroma leak removal
+            //
+            // Definition: a pixel is "bg leak" iff there exists a path from
+            // it to a pixel already marked `removed`, where every pixel on
+            // the path has distFromBg <= EXPAND_TOL (i.e. pure-chroma or
+            // near-fringe). Conversely, a pure-chroma pixel surrounded by
+            // the character's BLACK OUTLINE is NOT reachable (outline has
+            // dist >> EXPAND_TOL from green) and therefore is part of the
+            // character body — keep it.
+            //
+            // This single rule replaces all prior shape/density/ring heuristics
+            // with the actual semantic definition of "background leak":
+            //
+            //   ✓ Halo fringe around head (Shrek): pixels are immediately
+            //     adjacent to removed bg → reached → REMOVED.
+            //   ✓ Vest-armpit gap leak (Kakashi): connects to outside bg
+            //     through anti-aliased fringe → reached → REMOVED.
+            //   ✓ Solid green skin (Shrek face/hand): completely encircled
+            //     by outline (dist 255 from green) → NOT reached → KEPT.
+            //   ✓ Naruto torso strip: surrounded by orange (dist > EXPAND_TOL
+            //     from green) → only reached if the strip itself sits
+            //     adjacent to a fringe gap, which is exactly when it's a
+            //     real leak. Pure isolated highlight pixels on orange would
+            //     stay (correct — those are character pixels).
+            //
+            // BFS uses 4-connectivity to avoid diagonal leaks through
+            // pixel-art outlines (a 1-pixel diagonal break in outline
+            // would otherwise let the fill leak in).
+            // =========================================================
+            const EXPAND_TOL = 55; // include pure chroma + slight fringe
+            const reachStack: number[] = [];
+            const reached = new Uint8Array(w * h);
+
+            // Seed from every already-removed pixel that has at least one
+            // non-removed neighbor (the boundary of the current mask).
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const vi = y * w + x;
+                    if (!removed[vi]) continue;
+                    if (reached[vi]) continue;
+                    reached[vi] = 1;
+                    reachStack.push(vi);
+                }
+            }
+
+            while (reachStack.length > 0) {
+                const v = reachStack.pop()!;
+                const cx = v % w, cy = (v / w) | 0;
+                const neighbors = [
+                    cx > 0 ? v - 1 : -1,
+                    cx < w - 1 ? v + 1 : -1,
+                    cy > 0 ? v - w : -1,
+                    cy < h - 1 ? v + w : -1,
+                ];
+                for (const ni of neighbors) {
+                    if (ni < 0) continue;
+                    if (reached[ni]) continue;
+                    if (removed[ni]) {
+                        // already-removed pixel — propagate freely
+                        reached[ni] = 1;
+                        reachStack.push(ni);
+                        continue;
+                    }
+                    const npi = ni * 4;
+                    if (data[npi + 3] === 0) continue;
+                    if (distFromBg(npi) > EXPAND_TOL) continue;
+                    // Pure-chroma / fringe pixel reachable from outside → leak
+                    reached[ni] = 1;
+                    reachStack.push(ni);
+                }
+            }
+
+            // Erase all newly-reached non-removed pixels (the leaks).
+            for (let i = 0; i < w * h; i++) {
+                if (reached[i] && !removed[i]) {
+                    removed[i] = 1;
+                    data[i * 4 + 3] = 0;
+                }
+            }
+
+            ctx.putImageData(imageData, 0, 0);
+            resolve(canvas.toDataURL('image/png'));
+
             ctx.putImageData(imageData, 0, 0);
             resolve(canvas.toDataURL('image/png'));
         };
