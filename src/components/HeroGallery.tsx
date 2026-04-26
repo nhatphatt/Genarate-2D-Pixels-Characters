@@ -15,6 +15,8 @@ export interface SavedCharacter {
   rawImage: string;
   cleanImage: string;
   animations: { id: string; name: string; customPrompt: string }[];
+  /** Per-animation frame count (1..10). Index aligned with `animations`. */
+  frameCounts: number[];
   animRows: any[];
   animRowsNoBg: (string | null)[];
   spriteSheet: string | null;

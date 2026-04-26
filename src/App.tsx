@@ -5,7 +5,7 @@ import { compileSpriteSheet } from './lib/spriteCompiler';
 import { GameViewport } from './components/GameViewport';
 import {
   AlertCircle, Image as ImageIcon, Play, RefreshCw, XCircle, Download, Plus, Trash2,
-  FileJson, Monitor, Gamepad2, Info, ChevronRight,
+  FileJson, Monitor, Gamepad2, Info, ChevronRight, Minus,
 } from 'lucide-react';
 import { Header, type AppState } from './components/Header';
 import { EmptyLanding } from './components/EmptyLanding';
@@ -55,6 +55,12 @@ export default function App() {
   const animRows = activeChar?.animRows ?? [];
   const animRowsNoBg = activeChar?.animRowsNoBg ?? [];
   const compiledSpriteSheet = activeChar?.spriteSheet ?? null;
+  // Per-animation frame counts (default 4 each, clamped 1..10).
+  // Older saved characters may not have this array — fall back to 4 per animation.
+  const frameCounts: number[] = (activeChar?.frameCounts && activeChar.frameCounts.length === animations.length)
+    ? activeChar.frameCounts
+    : animations.map(() => 4);
+  const maxFramesPerRow = Math.max(1, ...frameCounts);
 
   const [selectedFrame, setSelectedFrame] = useState<{ rowIndex: number; frameIndex: number; url: string } | null>(null);
   const [previewChar, setPreviewChar] = useState<SavedCharacter | null>(null);
@@ -86,6 +92,29 @@ export default function App() {
     setSavedChars(prev => prev.map(c => (c.id === charId ? { ...c, group } : c)));
   };
 
+  /**
+   * Compute the set of "stable" row indices for an animation list — rows whose
+   * frames should NOT be horizontally re-centered per-frame because they are a
+   * tight breathing/looping cycle (e.g. Idle). Without this the sprite compiler
+   * centers each frame on its own bbox, which makes Idle appear to "flicker"
+   * left-right when arms / chest expand.
+   */
+  const getStableRows = (anims: { name: string }[]): Set<number> => {
+    const set = new Set<number>();
+    anims.forEach((a, i) => { if (a.name.trim().toLowerCase() === 'idle') set.add(i); });
+    return set;
+  };
+
+  /**
+   * Build the per-row, per-frame URL list that `compileSpriteSheet` consumes.
+   * Each row contributes its `framesUrls` array (one PNG data-URL per frame,
+   * background already removed), or `null` if not yet generated. This avoids
+   * the old strip-slicing path that silently dropped frames whenever the
+   * AI-rendered poses touched or the row's frame count changed.
+   */
+  const buildFramesPayload = (rows: (AnimationRowResult | null)[]): (string[] | null)[] =>
+    rows.map(r => (r ? r.framesUrls : null));
+
   const createGroup = (name: string) => {
     setEmptyGroups(prev => (prev.includes(name) ? prev : [...prev, name]));
   };
@@ -110,6 +139,7 @@ export default function App() {
     const char: SavedCharacter = {
       id, name, prompt, group, artStyle, perspective, rawImage: raw, cleanImage: clean,
       animations: makeDefaultAnims(),
+      frameCounts: DEFAULT_ANIMATIONS.map(() => 4),
       animRows: Array(7).fill(null), animRowsNoBg: Array(7).fill(null), spriteSheet: null,
     };
     setSavedChars(prev => [char, ...prev]);
@@ -206,10 +236,14 @@ export default function App() {
     setIsGenerating(true);
     setErrorMsg(null);
     const animDef = activeChar.animations[rowIndex];
-    setLoadingMsg(`Generating ${animDef.name} animation...`);
+    const charFrameCounts = (activeChar.frameCounts && activeChar.frameCounts.length === activeChar.animations.length)
+      ? activeChar.frameCounts
+      : activeChar.animations.map(() => 4);
+    const fc = charFrameCounts[rowIndex] ?? 4;
+    setLoadingMsg(`Generating ${animDef.name} animation (${fc} frames)...`);
     try {
       const sourceImage = activeChar.cleanImage;
-      const b64 = await generateAnimationRow(sourceImage, animDef.name, animDef.customPrompt, msg => setLoadingMsg(msg), activeChar.artStyle, activeChar.perspective);
+      const b64 = await generateAnimationRow(sourceImage, animDef.name, animDef.customPrompt, msg => setLoadingMsg(msg), activeChar.artStyle, activeChar.perspective, fc);
 
       const newRows = [...activeChar.animRows];
       newRows[rowIndex] = b64;
@@ -217,7 +251,7 @@ export default function App() {
       newRowsNoBg[rowIndex] = b64.rowUrl;
 
       setLoadingMsg('Compiling Sprite Sheet...');
-      const compiled = await compileSpriteSheet(newRowsNoBg, 4, activeChar.cleanImage || undefined);
+      const compiled = await compileSpriteSheet(buildFramesPayload(newRows), charFrameCounts, activeChar.cleanImage || undefined, getStableRows(activeChar.animations));
       updateActiveChar({ animRows: newRows, animRowsNoBg: newRowsNoBg, spriteSheet: compiled });
     } catch (e) {
       handleError(e);
@@ -231,10 +265,14 @@ export default function App() {
     setIsGenerating(true);
     setErrorMsg(null);
     const animDef = activeChar.animations[rowIndex];
-    setLoadingMsg(`Regenerating ${animDef.name} frame ${frameIndex + 1}...`);
+    const charFrameCounts = (activeChar.frameCounts && activeChar.frameCounts.length === activeChar.animations.length)
+      ? activeChar.frameCounts
+      : activeChar.animations.map(() => 4);
+    const fc = charFrameCounts[rowIndex] ?? 4;
+    setLoadingMsg(`Regenerating ${animDef.name} frame ${frameIndex + 1}/${fc}...`);
     try {
       const sourceImage = activeChar.cleanImage;
-      const newFrameUrl = await regenerateSingleFrame(sourceImage, animDef.name, animDef.customPrompt, frameIndex, msg => setLoadingMsg(msg), activeChar.artStyle, activeChar.perspective);
+      const newFrameUrl = await regenerateSingleFrame(sourceImage, animDef.name, animDef.customPrompt, frameIndex, msg => setLoadingMsg(msg), activeChar.artStyle, activeChar.perspective, fc);
 
       const newRows = [...activeChar.animRows];
       const row = newRows[rowIndex]!;
@@ -251,7 +289,7 @@ export default function App() {
       setSelectedFrame(prev => (prev ? { ...prev, url: newFrameUrl } : null));
 
       setLoadingMsg('Compiling Sprite Sheet...');
-      const compiled = await compileSpriteSheet(newRowsNoBg, 4, activeChar.cleanImage || undefined);
+      const compiled = await compileSpriteSheet(buildFramesPayload(newRows), charFrameCounts, activeChar.cleanImage || undefined, getStableRows(activeChar.animations));
       updateActiveChar({ animRows: newRows, animRowsNoBg: newRowsNoBg, spriteSheet: compiled });
     } catch (e) {
       handleError(e);
@@ -267,15 +305,19 @@ export default function App() {
 
     let currentRows = [...activeChar.animRows];
     let currentRowsNoBg = [...activeChar.animRowsNoBg];
+    const charFrameCounts = (activeChar.frameCounts && activeChar.frameCounts.length === activeChar.animations.length)
+      ? activeChar.frameCounts
+      : activeChar.animations.map(() => 4);
 
     try {
       const sourceImage = activeChar.cleanImage;
       for (let i = 0; i < activeChar.animations.length; i++) {
         if (!currentRows[i]) {
           const animDef = activeChar.animations[i];
-          setLoadingMsg(`Generating ${animDef.name} (${i + 1}/${activeChar.animations.length})...`);
+          const fc = charFrameCounts[i] ?? 4;
+          setLoadingMsg(`Generating ${animDef.name} (${i + 1}/${activeChar.animations.length}) — ${fc} frames...`);
 
-          const b64 = await generateAnimationRow(sourceImage, animDef.name, animDef.customPrompt, msg => setLoadingMsg(msg), activeChar.artStyle, activeChar.perspective);
+          const b64 = await generateAnimationRow(sourceImage, animDef.name, animDef.customPrompt, msg => setLoadingMsg(msg), activeChar.artStyle, activeChar.perspective, fc);
           currentRows[i] = b64;
           currentRowsNoBg[i] = b64.rowUrl;
           updateActiveChar({ animRows: [...currentRows], animRowsNoBg: [...currentRowsNoBg] });
@@ -285,7 +327,7 @@ export default function App() {
       }
 
       setLoadingMsg('Compiling final Sprite Sheet...');
-      const compiled = await compileSpriteSheet(currentRowsNoBg, 4, activeChar.cleanImage || undefined);
+      const compiled = await compileSpriteSheet(buildFramesPayload(currentRows), charFrameCounts, activeChar.cleanImage || undefined, getStableRows(activeChar.animations));
       updateActiveChar({ animRows: [...currentRows], animRowsNoBg: [...currentRowsNoBg], spriteSheet: compiled });
     } catch (e) {
       handleError(e);
@@ -302,14 +344,18 @@ export default function App() {
 
     const currentRows: (AnimationRowResult | null)[] = [];
     const currentRowsNoBg: (string | null)[] = [];
+    const charFrameCounts = (activeChar.frameCounts && activeChar.frameCounts.length === activeChar.animations.length)
+      ? activeChar.frameCounts
+      : activeChar.animations.map(() => 4);
 
     try {
       const sourceImage = activeChar.cleanImage;
       for (let i = 0; i < activeChar.animations.length; i++) {
         const animDef = activeChar.animations[i];
-        setLoadingMsg(`Re-generating ${animDef.name} (${i + 1}/${activeChar.animations.length})...`);
+        const fc = charFrameCounts[i] ?? 4;
+        setLoadingMsg(`Re-generating ${animDef.name} (${i + 1}/${activeChar.animations.length}) — ${fc} frames...`);
 
-        const b64 = await generateAnimationRow(sourceImage, animDef.name, animDef.customPrompt, msg => setLoadingMsg(msg), activeChar.artStyle, activeChar.perspective);
+        const b64 = await generateAnimationRow(sourceImage, animDef.name, animDef.customPrompt, msg => setLoadingMsg(msg), activeChar.artStyle, activeChar.perspective, fc);
         currentRows[i] = b64;
         currentRowsNoBg[i] = b64.rowUrl;
         updateActiveChar({ animRows: [...currentRows], animRowsNoBg: [...currentRowsNoBg] });
@@ -318,7 +364,7 @@ export default function App() {
       }
 
       setLoadingMsg('Compiling final Sprite Sheet...');
-      const compiled = await compileSpriteSheet(currentRowsNoBg, 4, activeChar.cleanImage || undefined);
+      const compiled = await compileSpriteSheet(buildFramesPayload(currentRows), charFrameCounts, activeChar.cleanImage || undefined, getStableRows(activeChar.animations));
       updateActiveChar({ animRows: [...currentRows], animRowsNoBg: [...currentRowsNoBg], spriteSheet: compiled });
     } catch (e) {
       handleError(e);
@@ -336,8 +382,12 @@ export default function App() {
 
   const handleAddAnimation = () => {
     if (!activeChar) return;
+    const existingFC = (activeChar.frameCounts && activeChar.frameCounts.length === activeChar.animations.length)
+      ? activeChar.frameCounts
+      : activeChar.animations.map(() => 4);
     updateActiveChar({
       animations: [...activeChar.animations, { id: Math.random().toString(), name: 'Custom Action', customPrompt: '' }],
+      frameCounts: [...existingFC, 4],
       animRows: [...activeChar.animRows, null],
       animRowsNoBg: [...activeChar.animRowsNoBg, null],
     });
@@ -348,16 +398,54 @@ export default function App() {
     const newAnims = [...activeChar.animations]; newAnims.splice(index, 1);
     const newRows = [...activeChar.animRows]; newRows.splice(index, 1);
     const newRowsNoBg = [...activeChar.animRowsNoBg]; newRowsNoBg.splice(index, 1);
-    updateActiveChar({ animations: newAnims, animRows: newRows, animRowsNoBg: newRowsNoBg });
+    const existingFC = (activeChar.frameCounts && activeChar.frameCounts.length === activeChar.animations.length)
+      ? [...activeChar.frameCounts]
+      : activeChar.animations.map(() => 4);
+    existingFC.splice(index, 1);
+    updateActiveChar({ animations: newAnims, frameCounts: existingFC, animRows: newRows, animRowsNoBg: newRowsNoBg });
+  };
+
+  /**
+   * Update the frame count for a single animation row.
+   * Clamps to 1..10. Resets that row's generated frames so the user must re-generate
+   * to match the new count (a 6-frame strip cannot be re-sliced from a 4-frame one).
+   */
+  const handleUpdateFrameCount = (rowIndex: number, delta: number) => {
+    if (!activeChar) return;
+    const existingFC = (activeChar.frameCounts && activeChar.frameCounts.length === activeChar.animations.length)
+      ? [...activeChar.frameCounts]
+      : activeChar.animations.map(() => 4);
+    const current = existingFC[rowIndex] ?? 4;
+    const next = Math.max(1, Math.min(10, current + delta));
+    if (next === current) return;
+    existingFC[rowIndex] = next;
+
+    // Invalidate this row's existing strip since frame count changed.
+    const newRows = [...activeChar.animRows];
+    const newRowsNoBg = [...activeChar.animRowsNoBg];
+    const hadStrip = !!newRows[rowIndex];
+    if (hadStrip) {
+      newRows[rowIndex] = null;
+      newRowsNoBg[rowIndex] = null;
+    }
+
+    updateActiveChar({
+      frameCounts: existingFC,
+      animRows: newRows,
+      animRowsNoBg: newRowsNoBg,
+      // Sprite sheet must be recompiled after re-generating; clear it for now.
+      spriteSheet: hadStrip ? null : activeChar.spriteSheet,
+    });
   };
 
   const getSpriteMetadata = () => {
     if (!compiledSpriteSheet) return null;
     const img = new Image();
     img.src = compiledSpriteSheet;
-    const frameW = Math.floor(img.width / 4);
+    const cols = maxFramesPerRow;
+    const frameW = Math.floor(img.width / cols);
     const frameH = Math.floor(img.height / animations.length);
-    return { sheetW: img.width, sheetH: img.height, frameW, frameH, rows: animations.length, cols: 4 };
+    return { sheetW: img.width, sheetH: img.height, frameW, frameH, rows: animations.length, cols };
   };
 
   const handleDownloadPNG = () => {
@@ -380,8 +468,11 @@ export default function App() {
     let globalIdx = 0;
 
     animations.forEach((anim, rowIdx) => {
+      const rowFrames = frameCounts[rowIdx] ?? 4;
       const tagFrom = globalIdx;
-      for (let col = 0; col < 4; col++) {
+      // Only emit entries for the actual frames in this row — unused cells
+      // (when row has fewer frames than the sheet's max columns) are skipped.
+      for (let col = 0; col < rowFrames; col++) {
         const key = `${anim.name.toLowerCase()}_${col}`;
         frames[key] = {
           frame: { x: col * meta.frameW, y: rowIdx * meta.frameH, w: meta.frameW, h: meta.frameH },
@@ -397,8 +488,9 @@ export default function App() {
 
     const atlas = {
       frames,
-      animations: animations.reduce((acc, anim) => {
-        acc[anim.name.toLowerCase()] = Array.from({ length: 4 }, (_, i) => `${anim.name.toLowerCase()}_${i}`);
+      animations: animations.reduce((acc, anim, rowIdx) => {
+        const rowFrames = frameCounts[rowIdx] ?? 4;
+        acc[anim.name.toLowerCase()] = Array.from({ length: rowFrames }, (_, i) => `${anim.name.toLowerCase()}_${i}`);
         return acc;
       }, {} as Record<string, string[]>),
       meta: {
@@ -409,7 +501,7 @@ export default function App() {
         size: { w: meta.sheetW, h: meta.sheetH },
         scale: '1',
         frameTags: animationTags,
-        grid: { cellWidth: meta.frameW, cellHeight: meta.frameH, columns: 4, rows: meta.rows },
+        grid: { cellWidth: meta.frameW, cellHeight: meta.frameH, columns: meta.cols, rows: meta.rows },
       },
     };
 
@@ -504,13 +596,36 @@ export default function App() {
               {animations.map((animDef, i) => (
                 <div key={animDef.id} className="bg-[#161616] border-2 border-zinc-800 p-4 flex flex-col gap-4 hover:border-zinc-600 transition-colors">
                   <div className="flex flex-col md:flex-row items-center gap-4">
-                    <div className="w-full md:w-32 shrink-0">
+                    <div className="w-full md:w-32 shrink-0 flex flex-col gap-2">
                       <input
                         type="text"
                         value={animDef.name}
                         onChange={e => handleUpdateAnimation(i, 'name', e.target.value)}
                         className="w-full bg-[#0D0D0D] border-x-0 border-t-0 border-b-2 border-zinc-800 p-1 text-white font-black uppercase tracking-widest text-lg focus:outline-none focus:border-[#BDFF00]"
                       />
+                      {/* Frame-count stepper (1..10). Changing this clears the row's existing strip. */}
+                      <div className="flex items-center gap-1 bg-[#0D0D0D] border border-zinc-800 px-1.5 py-1">
+                        <button
+                          onClick={() => handleUpdateFrameCount(i, -1)}
+                          disabled={isGenerating || (frameCounts[i] ?? 4) <= 1}
+                          title="Decrease frames"
+                          className="w-6 h-6 flex items-center justify-center text-zinc-400 hover:text-[#BDFF00] hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <Minus size={12} />
+                        </button>
+                        <div className="flex-1 text-center font-mono text-[10px] uppercase text-zinc-500 leading-tight">
+                          <div className="text-[#BDFF00] text-sm font-black">{frameCounts[i] ?? 4}</div>
+                          <div>frames</div>
+                        </div>
+                        <button
+                          onClick={() => handleUpdateFrameCount(i, +1)}
+                          disabled={isGenerating || (frameCounts[i] ?? 4) >= 10}
+                          title="Increase frames"
+                          className="w-6 h-6 flex items-center justify-center text-zinc-400 hover:text-[#BDFF00] hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <Plus size={12} />
+                        </button>
+                      </div>
                     </div>
 
                     <div
@@ -599,7 +714,8 @@ export default function App() {
               <div className="flex flex-col gap-8">
                 <GameViewport
                   spriteSheetData={compiledSpriteSheet}
-                  framesPerRow={4}
+                  framesPerRow={maxFramesPerRow}
+                  framesPerRowList={frameCounts}
                   totalRows={animations.length}
                 />
 

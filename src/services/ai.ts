@@ -222,75 +222,113 @@ export interface AnimationRowResult {
 
 // ============================================================
 // FRAME DESCRIPTIONS — one pose per frame, per animation
+// Returns exactly `frameCount` pose descriptions (clamped 1..10).
 // ============================================================
-function getFrameDescriptions(animName: string, customPrompt?: string): string[] {
+function getFrameDescriptions(animName: string, customPrompt: string | undefined, frameCount: number): string[] {
+  const n = Math.max(1, Math.min(10, Math.floor(frameCount || 4)));
+  const NO_FLIP = "DO NOT flip or mirror. Character MUST face EXACTLY the same direction as the reference. Keep all outfit details, accessories and color patterns on the SAME side as the reference.";
+
+  // Phase descriptors interpolated across n frames so any 1..10 count maps to a smooth action arc.
+  // We always include start + end; in-between we sample evenly across an action curve.
+  const phaseDescriptor = (i: number, total: number, action: { start: string; mid: string; peak: string; end: string }): string => {
+    if (total === 1) return action.peak; // single frame = the most representative pose
+    if (i === 0) return action.start;
+    if (i === total - 1) return action.end;
+    // 0 < t < 1 across in-between frames
+    const t = i / (total - 1);
+    if (t < 0.4) return action.mid + " (early progression)";
+    if (t < 0.65) return action.peak + " (peak)";
+    return action.mid + " (recovery)";
+  };
+
+  const labelize = (i: number) => `(frame ${i + 1} of ${n})`;
+
   if (customPrompt && customPrompt.trim()) {
-    return [
-      `${customPrompt} — starting pose (frame 1 of 4). DO NOT flip or mirror.`,
-      `${customPrompt} — in progress (frame 2 of 4). Character faces SAME direction as reference. Keep outfit details on the SAME side.`,
-      `${customPrompt} — peak action (frame 3 of 4). DO NOT flip. Character must face EXACTLY the same way.`,
-      `${customPrompt} — finishing/recovery (frame 4 of 4). Keep the same facing direction as all other frames. DO NOT mirror.`,
-    ];
+    const action = {
+      start: `${customPrompt} — starting pose, beginning of the action`,
+      mid:   `${customPrompt} — in progress`,
+      peak:  `${customPrompt} — peak action, maximum expression`,
+      end:   `${customPrompt} — finishing/recovery, action winding down`,
+    };
+    return Array.from({ length: n }, (_, i) => `${phaseDescriptor(i, n, action)} ${labelize(i)}. ${NO_FLIP}`);
   }
 
+  let action: { start: string; mid: string; peak: string; end: string };
   switch (animName) {
     case "Idle":
-      return [
-        "Idle pose: standing perfectly still, relaxed neutral stance, normal breathing. DO NOT flip or mirror.",
-        "Idle pose: chest slightly expanded, shoulders slightly raised (breathing in). Character faces EXACTLY the SAME direction as reference.",
-        "Idle pose: peak of breath, body slightly taller, very subtle movement. Keep outfit details on the SAME side.",
-        "Idle pose: exhaling, shoulders relaxing back down to start. DO NOT flip. Character must face EXACTLY the same way.",
-      ];
+      // ============================================================
+      // IDLE — game-standard "breathing loop"
+      // Anchor: feet, legs, hips MUST stay PIXEL-IDENTICAL across all frames.
+      // Only the chest, shoulders, head and hair sway by 1–2 pixels — this is
+      // the classic 4-key breathing cycle: neutral → inhale → peak → exhale.
+      // The total silhouette height changes by AT MOST 2 pixels frame-to-frame.
+      // Do NOT change pose, do NOT shift weight, do NOT lift any foot off the ground.
+      // ============================================================
+      action = {
+        start: "Idle breathing pose A (neutral rest): character stands relaxed, weight evenly on both feet, BOTH FEET FLAT ON THE GROUND in EXACTLY the same position as the reference image, arms hanging naturally at sides, head level, eyes open looking forward. This is the resting baseline of the breathing loop. Feet, ankles, knees and hips are PIXEL-IDENTICAL to the reference — do NOT move them.",
+        mid:   "Idle breathing pose B (inhale start): IDENTICAL to pose A from the hips DOWN — feet, legs, hips do not move at all. The ONLY changes: chest expands by ~1 pixel, shoulders rise by ~1 pixel, head stays level. Arms rest passively at sides. No weight shift. Total silhouette height grows by AT MOST 1 pixel.",
+        peak:  "Idle breathing pose C (full inhale, peak): IDENTICAL to pose A from the hips DOWN. Chest fully expanded (+2 pixels max), shoulders raised (+1–2 pixels max), head may rise by 1 pixel only. Arms still relaxed at sides. Body is at its tallest point of the breath cycle but legs/feet/hips are UNCHANGED.",
+        end:   "Idle breathing pose D (exhale, returning to rest): IDENTICAL to pose A from the hips DOWN. Chest contracting back down, shoulders lowering, head returning to level. About halfway between pose A and pose C. Loops smoothly back into pose A. Feet/legs/hips PIXEL-IDENTICAL to the reference.",
+      };
+      break;
     case "Walk":
-      return [
-        "Walking pose: one leg stepping in front, opposite arm extended in front, back straight, body upright. DO NOT flip or mirror.",
-        "Walking pose: legs passing each other mid-stride, body dipping slightly, weight shifting. Keep outfit details on the SAME side as reference.",
-        "Walking pose: opposite leg stepping in front, other arm extended in front. Character faces SAME direction as reference.",
-        "Walking pose: legs passing each other mid-stride, body dipping slightly. DO NOT flip. Keep the same facing direction.",
-      ];
+      action = {
+        start: "Walking pose: one leg stepping in front, opposite arm extended in front, back straight, body upright",
+        mid:   "Walking pose: legs passing each other mid-stride, body dipping slightly, weight shifting",
+        peak:  "Walking pose: opposite leg stepping in front, other arm extended in front",
+        end:   "Walking pose: returning toward neutral stance, weight settling",
+      };
+      break;
     case "Run":
-      return [
-        "Running pose: one leg in front striking the ground, opposite arm in front, torso leaning slightly. DO NOT flip or mirror the character.",
-        "Running pose: front knee deeply bent, body dipping low, pushing off the ground with back leg. Keep outfit details on the same side as the reference.",
-        "Running pose: mid-air stride, both feet off ground, legs spread apart, arms pumping. Character must face the SAME direction as the reference — do NOT mirror.",
-        "Running pose: opposite leg now in front striking ground, body leaning into the stride. Keep the same facing direction as all other frames. DO NOT flip.",
-      ];
+      action = {
+        start: "Running pose: one leg in front striking the ground, opposite arm in front, torso leaning slightly",
+        mid:   "Running pose: front knee deeply bent, body dipping low, pushing off the ground with back leg",
+        peak:  "Running pose: mid-air stride, both feet off ground, legs spread apart, arms pumping",
+        end:   "Running pose: opposite leg now in front striking ground, body leaning into the stride",
+      };
+      break;
     case "Attack":
-      return [
-        "Attack wind-up pose: one arm pulled back behind the body, stance coiled and ready to strike. Character faces same direction as reference.",
-        "Attack mid-swing pose: arm swinging in the direction the character faces, body rotating into the punch/strike. DO NOT flip or mirror the character.",
-        "Attack impact pose: arm/fist fully extended in the direction the character is facing, maximum reach. Keep the character facing the EXACT same direction as the reference image.",
-        "Attack recovery pose: arm pulling back to the body, returning to neutral relaxed stance. Same facing direction as all other frames. DO NOT mirror.",
-      ];
+      action = {
+        start: "Attack wind-up pose: one arm pulled back behind the body, stance coiled and ready to strike",
+        mid:   "Attack mid-swing pose: arm swinging in the direction the character faces, body rotating into the strike",
+        peak:  "Attack impact pose: arm/fist fully extended in the direction the character is facing, maximum reach",
+        end:   "Attack recovery pose: arm pulling back to the body, returning to neutral relaxed stance",
+      };
+      break;
     case "Jump":
-      return [
-        "Jump preparation pose: crouching down, knees deeply bent, arms pulled down, about to spring up. DO NOT flip or mirror the character.",
-        "Jump launch pose: springing upward, legs pushing off, arms swinging up. Keep outfit details on the SAME side as reference.",
-        "Jump apex pose: at the highest point in air, arms raised above head, legs tucked slightly. Character faces SAME direction as reference.",
-        "Jump landing pose: falling downward, legs extending below, arms out for balance. DO NOT flip. Keep the same facing direction.",
-      ];
+      action = {
+        start: "Jump preparation pose: crouching down, knees deeply bent, arms pulled down, about to spring up",
+        mid:   "Jump launch pose: springing upward, legs pushing off, arms swinging up",
+        peak:  "Jump apex pose: at the highest point in air, arms raised above head, legs tucked slightly",
+        end:   "Jump landing pose: falling downward, legs extending below, arms out for balance",
+      };
+      break;
     case "Hurt":
-      return [
-        "Hurt reaction pose: initial flinch, head tilting back slightly, eyes squinting. DO NOT flip or mirror.",
-        "Hurt recoil pose: body recoiling backward, one arm raised defensively in front. Keep character facing SAME direction as reference.",
-        "Hurt hunched pose: body hunched forward, tense, pain expression, arms close to body. Keep outfit details on the SAME side.",
-        "Hurt holding pose: still hunched and tense, same as previous frame. DO NOT flip. Character must face EXACTLY the same way.",
-      ];
+      action = {
+        start: "Hurt reaction pose: initial flinch, head tilting back slightly, eyes squinting",
+        mid:   "Hurt recoil pose: body recoiling backward, one arm raised defensively in front",
+        peak:  "Hurt hunched pose: body hunched forward, tense, pain expression, arms close to body",
+        end:   "Hurt holding pose: still hunched and tense, slowly recovering",
+      };
+      break;
     case "Death":
-      return [
-        "Death frame 1: body jolting from impact, still standing upright at full height. DO NOT flip or mirror.",
-        "Death frame 2: knees starting to buckle, body bending forward, losing balance. Character faces SAME direction as reference.",
-        "Death frame 3: collapsed onto knees, upper body hunched forward, head drooping down. Keep outfit details on the SAME side.",
-        "Death frame 4: slumped into a crumpled kneeling heap on the ground. Compact pose. DO NOT flip. Character must face EXACTLY the same way.",
-      ];
+      action = {
+        start: "Death frame: body jolting from impact, still standing upright at full height",
+        mid:   "Death frame: knees starting to buckle, body bending forward, losing balance",
+        peak:  "Death frame: collapsed onto knees, upper body hunched forward, head drooping down",
+        end:   "Death frame: slumped into a crumpled kneeling heap on the ground, compact pose",
+      };
+      break;
     default:
-      return [
-        `${animName} — starting pose, beginning of the action. DO NOT flip or mirror.`,
-        `${animName} — early progression, action building. Character faces SAME direction as reference.`,
-        `${animName} — peak of the action, maximum expression. Keep outfit details on the SAME side.`,
-        `${animName} — finishing or recovery, action winding down. DO NOT flip. Character must face EXACTLY the same way.`,
-      ];
+      action = {
+        start: `${animName} — starting pose, beginning of the action`,
+        mid:   `${animName} — early progression, action building`,
+        peak:  `${animName} — peak of the action, maximum expression`,
+        end:   `${animName} — finishing or recovery, action winding down`,
+      };
   }
+
+  return Array.from({ length: n }, (_, i) => `${phaseDescriptor(i, n, action)} ${labelize(i)}. ${NO_FLIP}`);
 }
 
 // ============================================================
@@ -303,7 +341,23 @@ async function generateSingleFrameObj(
   poseDescription: string,
   style: ArtStyle = 'pixel',
   perspective: Perspective = 'platformer',
+  animName: string = '',
 ): Promise<string> {
+  // Idle gets an extra lock: the lower body must be PIXEL-IDENTICAL across all
+  // 4 frames so that the only motion the player sees is a 1–2px breathing bob
+  // on the chest/shoulders/head. Without this lock the AI re-poses the legs
+  // every frame and the bottom-center align in spriteCompiler causes the
+  // whole sprite to "flicker" up and down in the viewport.
+  const idleLock = animName === 'Idle' ? `
+IDLE LOCK (CRITICAL — applies to this frame only):
+- This is one frame of an IDLE BREATHING LOOP. The character is NOT moving — only breathing.
+- Feet, ankles, knees, hips and pelvis MUST be drawn at the EXACT SAME PIXEL POSITIONS as in the reference image. Do NOT lift either foot. Do NOT bend the knees differently. Do NOT shift the weight to one side.
+- The character's overall HEIGHT must stay within ±2 pixels of the reference. Do NOT make the character taller or shorter beyond that.
+- The character's overall WIDTH and horizontal silhouette must stay within ±1 pixel of the reference.
+- Allowed motion: chest expansion/contraction (max 2px), shoulder rise/fall (max 2px), head bob (max 1px), hair/cape sway (max 2px). NOTHING ELSE moves.
+- The bounding box of the character must be the SAME SIZE in every frame so the animation does not flicker when looped.
+` : '';
+
   const prompt = `- Image 1: Reference character sprite. Match this EXACTLY.
 
 ${NO_SHADOW_RULE}
@@ -319,7 +373,7 @@ MANDATORY RULES:
 6. Character must be fully visible head to toe, centered with padding.
 7. Do NOT change the character's size compared to the reference.
 ${getPerspectiveRules(perspective)}
-
+${idleLock}
 POSE TO DRAW:
 ${poseDescription}
 
@@ -360,12 +414,13 @@ export function combineFramesIntoStrip(frameDataUrls: string[]): Promise<string>
         images.push(img);
       }
 
+      const count = Math.max(1, images.length);
       const maxW = Math.max(...images.map(i => i.width));
       const maxH = Math.max(...images.map(i => i.height));
       const gap = Math.max(20, Math.floor(maxW * 0.5));
 
       const canvas = document.createElement('canvas');
-      canvas.width = maxW * 4 + gap * 3;
+      canvas.width = maxW * count + gap * Math.max(0, count - 1);
       canvas.height = maxH;
       const ctx = canvas.getContext('2d');
       if (!ctx) return reject(new Error('No canvas context'));
@@ -374,7 +429,7 @@ export function combineFramesIntoStrip(frameDataUrls: string[]): Promise<string>
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       // Draw each frame bottom-center aligned in its slot
-      for (let i = 0; i < images.length; i++) {
+      for (let i = 0; i < count; i++) {
         const x = i * (maxW + gap) + Math.floor((maxW - images[i].width) / 2);
         const y = maxH - images[i].height; // bottom-align
         ctx.drawImage(images[i], x, y);
@@ -397,34 +452,38 @@ export async function generateAnimationRow(
   onProgress?: (msg: string) => void,
   style: ArtStyle = 'pixel',
   perspective: Perspective = 'platformer',
+  frameCount: number = 4,
 ): Promise<AnimationRowResult> {
   const ai = getAiClient();
+
+  // Clamp frame count to allowed range (1..10)
+  const n = Math.max(1, Math.min(10, Math.floor(frameCount || 4)));
 
   // Extract base64 and mimetype from the reference image
   const mimeTypeMatch = baseCharImage.match(/data:(.*?);base64,/);
   const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : "image/png";
   const base64Data = baseCharImage.replace(/^data:image\/\w+;base64,/, "");
 
-  // Get the 4 individual pose descriptions for this animation
-  const frameDescs = getFrameDescriptions(animName, customPrompt);
+  // Get pose descriptions for this animation (one per frame)
+  const frameDescs = getFrameDescriptions(animName, customPrompt, n);
 
   // Generate each frame one-by-one for maximum consistency
   const frameDataUrls: string[] = [];
 
-  for (let i = 0; i < 4; i++) {
-    onProgress?.(`Generating ${animName} frame ${i + 1}/4...`);
+  for (let i = 0; i < n; i++) {
+    onProgress?.(`Generating ${animName} frame ${i + 1}/${n}...`);
 
-    const frameUrl = await generateSingleFrameObj(ai, base64Data, mimeType, frameDescs[i], style, perspective);
+    const frameUrl = await generateSingleFrameObj(ai, base64Data, mimeType, frameDescs[i], style, perspective, animName);
 
     // Remove background from this individual frame immediately.
     // This is far more reliable than removing bg from the combined strip,
     // because each frame's green bg is fully connected to its own edges.
-    onProgress?.(`Cleaning ${animName} frame ${i + 1}/4...`);
+    onProgress?.(`Cleaning ${animName} frame ${i + 1}/${n}...`);
     const cleanFrame = await removeBackground(frameUrl, 70);
     frameDataUrls.push(cleanFrame);
 
     // Cooldown between API calls to avoid rate limits
-    if (i < 3) {
+    if (i < n - 1) {
       await new Promise(r => setTimeout(r, 2000));
     }
   }
@@ -446,15 +505,18 @@ export async function regenerateSingleFrame(
   onProgress?: (msg: string) => void,
   style: ArtStyle = 'pixel',
   perspective: Perspective = 'platformer',
+  frameCount: number = 4,
 ): Promise<string> {
   const ai = getAiClient();
+  const n = Math.max(1, Math.min(10, Math.floor(frameCount || 4)));
+  const idx = Math.max(0, Math.min(n - 1, frameIndex));
   const [mimeTypeStr, base64Data] = baseCharImage.split(';base64,');
   const mimeType = mimeTypeStr.replace('data:', '');
-  const frameDescs = getFrameDescriptions(animName, customPrompt);
-  
-  onProgress?.(`Regenerating ${animName} frame ${frameIndex + 1}...`);
-  const frameUrl = await generateSingleFrameObj(ai, base64Data, mimeType, frameDescs[frameIndex], style, perspective);
-  
-  onProgress?.(`Cleaning frame ${frameIndex + 1}...`);
+  const frameDescs = getFrameDescriptions(animName, customPrompt, n);
+
+  onProgress?.(`Regenerating ${animName} frame ${idx + 1}/${n}...`);
+  const frameUrl = await generateSingleFrameObj(ai, base64Data, mimeType, frameDescs[idx], style, perspective, animName);
+
+  onProgress?.(`Cleaning frame ${idx + 1}/${n}...`);
   return removeBackground(frameUrl, 70);
 }
