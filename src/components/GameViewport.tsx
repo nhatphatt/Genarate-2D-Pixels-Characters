@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { formatKeyCode } from './HotkeyChip';
 
 interface GameViewportProps {
   spriteSheetData: string | null;
@@ -7,6 +8,9 @@ interface GameViewportProps {
   /** Per-row frame count when rows have different lengths. Falls back to `framesPerRow` if absent. */
   framesPerRowList?: number[];
   totalRows?: number;
+  /** Per-row playback metadata. RFC-002 §G4 + RFC-003.
+   *  Index aligned with `framesPerRowList`. Falls back to 8 fps / forward / "" when absent. */
+  animationsMeta?: { name: string; fps: number; loop: 'forward' | 'pingpong' | 'once'; keyBind: string }[];
 }
 
 const BACKGROUNDS = [
@@ -52,7 +56,7 @@ const GRAVITY = 900;
 const JUMP_VEL = -550;
 const FLOOR_Y = CH - 10;
 
-export const GameViewport = ({ spriteSheetData, framesPerRow = 4, framesPerRowList, totalRows = 7 }: GameViewportProps) => {
+export const GameViewport = ({ spriteSheetData, framesPerRow = 4, framesPerRowList, totalRows = 7, animationsMeta }: GameViewportProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [speed, setSpeed] = useState(150);
   const [flipDefault, setFlipDefault] = useState(false);
@@ -67,6 +71,13 @@ export const GameViewport = ({ spriteSheetData, framesPerRow = 4, framesPerRowLi
     facing: 1,
     action: 0, frameIndex: 0,
     isAttacking: false, isDead: false,
+    /** Index of the currently-playing one-shot animation row, or null when
+     *  no one-shot is active. RFC-003 §Render loop refactor. The dispatcher
+     *  refuses to start another one-shot until this clears (re-trigger
+     *  ignored — acceptance test #7). For Death (its loop === 'once' too)
+     *  we deliberately keep this set so the character pins on the last
+     *  frame; `handleRevive` clears it. */
+    oneShotRow: null as number | null,
     onPlatform: -1, // -1 = ground or air
     // visual-only state for camera shake (decays over time)
     shakeAmp: 0,
@@ -108,6 +119,15 @@ export const GameViewport = ({ spriteSheetData, framesPerRow = 4, framesPerRowLi
   // Live ref to per-row frame counts so the render loop sees updates without restarting.
   const framesPerRowListRef = useRef<number[] | undefined>(framesPerRowList);
   useEffect(() => { framesPerRowListRef.current = framesPerRowList; }, [framesPerRowList]);
+
+  // Live ref to per-row playback metadata (name + fps + loop + keyBind).
+  // Updated without restarting the loop so renames/rebinds take effect live.
+  const animationsMetaRef = useRef<{ name: string; fps: number; loop: 'forward' | 'pingpong' | 'once'; keyBind: string }[] | undefined>(animationsMeta);
+  useEffect(() => { animationsMetaRef.current = animationsMeta; }, [animationsMeta]);
+
+  // Ping-pong direction state, one slot per row. +1 = forward, -1 = reverse.
+  // Mutated by the render loop, never re-allocated, so it survives prop updates.
+  const pingpongDirRef = useRef<number[]>([]);
 
   // Spawn enemy
   const spawnEnemy = () => {
@@ -177,28 +197,109 @@ export const GameViewport = ({ spriteSheetData, framesPerRow = 4, framesPerRowLi
         let newAction = 0;
 
         const usePlatforms = showPlatformsRef.current;
+        const meta = animationsMetaRef.current;
 
-        if (gs.isDead) {
-          newAction = 6;
-        } else if (gs.isAttacking) {
-          newAction = 3;
-        } else {
-          if (keys.current['KeyK']) {
-            gs.isDead = true; gs.action = 6; gs.frameIndex = 0;
-            gs.shakeAmp = Math.max(gs.shakeAmp, 6);
+        // Helper: lower-cased name lookup (cached per tick).
+        const nameOf = (idx: number) => (meta?.[idx]?.name ?? '').trim().toLowerCase();
+
+        // Locate the Death row (if any) — its index is the only one allowed
+        // to keep `oneShotRow` pinned past the last frame so the character
+        // stays "dead". Other one-shots clear automatically.
+        let deathRowIdx = -1;
+        if (meta) {
+          for (let i = 0; i < meta.length; i++) {
+            if (nameOf(i) === 'death') { deathRowIdx = i; break; }
           }
-          else if (keys.current['KeyH']) { newAction = 5; gs.shakeAmp = Math.max(gs.shakeAmp, 3); }
-          else if (keys.current['KeyJ'] || keys.current['KeyZ'] || keys.current['Enter']) {
-            gs.isAttacking = true; newAction = 3; gs.frameIndex = 0;
+        }
+
+        // ---- 1. Continue an in-flight one-shot (Attack / Hurt / Death /
+        //         custom once) until its last frame, ignoring re-triggers.
+        if (gs.oneShotRow !== null) {
+          newAction = gs.oneShotRow;
+          // Sync legacy booleans for the existing camera-shake / death paths.
+          gs.isDead      = gs.oneShotRow === deathRowIdx;
+          gs.isAttacking = nameOf(gs.oneShotRow) === 'attack';
+        } else {
+          gs.isAttacking = false;
+          gs.isDead      = false;
+
+          // ---- 2. Scan non-locomotion rows for a triggered key. Priority:
+          //         Death > Hurt > Attack > custom. Within "custom" we go in
+          //         row order. First match wins; once-rows lock further scans.
+          const LOCO = new Set(['idle', 'walk', 'run', 'jump']);
+          let triggeredIdx = -1;
+          let triggeredLoop: 'forward' | 'pingpong' | 'once' = 'forward';
+          if (meta) {
+            // Two passes: priority names first (death/hurt/attack), then the
+            // remaining rows in declared order. This matches the legacy
+            // behaviour for the 7 default actions and gives custom rows a
+            // predictable, stable order.
+            const priorityOrder = ['death', 'hurt', 'attack'];
+            for (const targetName of priorityOrder) {
+              for (let i = 0; i < meta.length; i++) {
+                const n = nameOf(i);
+                if (n !== targetName) continue;
+                const code = meta[i].keyBind;
+                if (code && keys.current[code]) {
+                  triggeredIdx = i;
+                  triggeredLoop = meta[i].loop;
+                  break;
+                }
+              }
+              if (triggeredIdx >= 0) break;
+            }
+            // Custom rows fallback (anything not in LOCO and not a priority).
+            if (triggeredIdx < 0) {
+              for (let i = 0; i < meta.length; i++) {
+                const n = nameOf(i);
+                if (LOCO.has(n) || priorityOrder.includes(n)) continue;
+                const code = meta[i].keyBind;
+                if (code && keys.current[code]) {
+                  triggeredIdx = i;
+                  triggeredLoop = meta[i].loop;
+                  break;
+                }
+              }
+            }
+          }
+
+          if (triggeredIdx >= 0) {
+            if (triggeredLoop === 'once') {
+              // Latch a one-shot. The frame tick advances frameIndex up to
+              // safeRowFrames-1, and the post-tick check below clears
+              // gs.oneShotRow when we land on the last frame (except Death,
+              // which stays pinned).
+              gs.oneShotRow = triggeredIdx;
+              gs.frameIndex = 0;
+              if (triggeredIdx === deathRowIdx) {
+                gs.isDead = true;
+                gs.shakeAmp = Math.max(gs.shakeAmp, 6);
+              }
+              if (nameOf(triggeredIdx) === 'attack') gs.isAttacking = true;
+              if (nameOf(triggeredIdx) === 'hurt')   gs.shakeAmp = Math.max(gs.shakeAmp, 3);
+              newAction = triggeredIdx;
+            } else {
+              // forward / pingpong: hold-to-loop, no latching.
+              newAction = triggeredIdx;
+            }
           } else {
+            // ---- 3. Locomotion (unchanged). Arrow keys + Shift modifier +
+            //         Space/W/Up for jump. These rows are looked up by name
+            //         so reordering or adding rows above them in step 2
+            //         does not break the dispatcher.
+            const walkIdx = meta?.findIndex(m => m.name.trim().toLowerCase() === 'walk') ?? -1;
+            const runIdx  = meta?.findIndex(m => m.name.trim().toLowerCase() === 'run')  ?? -1;
+            const jumpIdx = meta?.findIndex(m => m.name.trim().toLowerCase() === 'jump') ?? -1;
+            const sprint  = !!(keys.current['ShiftLeft'] || keys.current['ShiftRight']);
+
             if (keys.current['ArrowRight'] || keys.current['KeyD']) {
-              gs.vx = keys.current['ShiftLeft'] || keys.current['ShiftRight'] ? 200 : 100;
+              gs.vx = sprint ? 200 : 100;
               gs.facing = 1;
-              newAction = keys.current['ShiftLeft'] || keys.current['ShiftRight'] ? 2 : 1;
+              newAction = sprint ? (runIdx >= 0 ? runIdx : 2) : (walkIdx >= 0 ? walkIdx : 1);
             } else if (keys.current['ArrowLeft'] || keys.current['KeyA']) {
-              gs.vx = keys.current['ShiftLeft'] || keys.current['ShiftRight'] ? -200 : -100;
+              gs.vx = sprint ? -200 : -100;
               gs.facing = -1;
-              newAction = keys.current['ShiftLeft'] || keys.current['ShiftRight'] ? 2 : 1;
+              newAction = sprint ? (runIdx >= 0 ? runIdx : 2) : (walkIdx >= 0 ? walkIdx : 1);
             } else { gs.vx = 0; }
 
             // Jump - check if on ground or on a platform (vy must be 0 = not already mid-air)
@@ -208,7 +309,11 @@ export const GameViewport = ({ spriteSheetData, framesPerRow = 4, framesPerRowLi
               gs.onPlatform = -1;
             }
           }
-          if (gs.vy !== 0) newAction = 4;
+          // Airborne always overrides locomotion with the Jump row.
+          if (gs.vy !== 0) {
+            const jumpIdx = meta?.findIndex(m => m.name.trim().toLowerCase() === 'jump') ?? -1;
+            newAction = jumpIdx >= 0 ? jumpIdx : 4;
+          }
         }
 
         // Physics
@@ -300,7 +405,7 @@ export const GameViewport = ({ spriteSheetData, framesPerRow = 4, framesPerRowLi
         // Clamp action
         const rows = totalRowsRef.current;
         if (newAction >= rows) newAction = 0;
-        if (gs.action !== newAction) { gs.action = newAction; gs.frameIndex = 0; }
+        if (gs.action !== newAction) { gs.action = newAction; gs.frameIndex = 0; pingpongDirRef.current[newAction] = 1; }
 
         // Per-row frame count (some rows may have fewer frames than the sheet's max columns)
         const rowFrames = (framesPerRowListRef.current && framesPerRowListRef.current[gs.action])
@@ -311,17 +416,61 @@ export const GameViewport = ({ spriteSheetData, framesPerRow = 4, framesPerRowLi
         // Clamp current frameIndex into the active row's range (e.g. switching from 8-frame Walk to 2-frame Hurt).
         if (gs.frameIndex >= safeRowFrames) gs.frameIndex = 0;
 
-        // Per-action frame duration. Idle (action 0) is a slow breathing loop
-        // and should tick noticeably slower than locomotion — otherwise the
-        // 1–2px breathing motion plays so fast it reads as a flicker.
-        // Standard idle tempo in 2D games is ~150–250ms per frame.
-        const frameDuration = gs.action === 0 ? Math.max(speed * 2, 180) : speed;
+        // Per-action playback. RFC-002 §G4.
+        // The animation row's fps drives the in-app viewport so the user sees
+        // exactly what their game engine will play. The `speed` slider is now
+        // a global multiplier on top — at 1× it matches the stored fps, at
+        // 2× it plays double speed, etc.
+        const rowMeta = animationsMetaRef.current?.[gs.action];
+        const baseFps = rowMeta?.fps ?? 8;
+        const loop: 'forward' | 'pingpong' | 'once' = rowMeta?.loop ?? 'forward';
+        // `speed` was originally locomotion ms/frame. Convert it to a
+        // multiplier around its old default (150 ms ≈ 1×) so existing UI
+        // semantics (lower = faster) survive: multiplier = 150 / speed.
+        const speedMultiplier = Math.max(0.05, 150 / Math.max(1, speed));
+        const effectiveFps = Math.max(0.5, baseFps * speedMultiplier);
+        const frameDuration = 1000 / effectiveFps;
 
         // Frame tick
         if (time - lastFrameTimeRef.current > frameDuration) {
-          if (gs.action === 6 && gs.frameIndex === safeRowFrames - 1) { /* stay dead */ }
-          else if (gs.isAttacking && gs.frameIndex === safeRowFrames - 1) { gs.isAttacking = false; }
-          else { gs.frameIndex = (gs.frameIndex + 1) % safeRowFrames; }
+          // Ensure ping-pong direction slot exists for this row.
+          if (pingpongDirRef.current[gs.action] === undefined) pingpongDirRef.current[gs.action] = 1;
+
+          // Death (= the active one-shot whose row is the Death row) holds
+          // on its last frame forever; Revive clears gs.oneShotRow.
+          const isActiveDeath = gs.oneShotRow === deathRowIdx && deathRowIdx >= 0;
+
+          if (isActiveDeath && gs.frameIndex === safeRowFrames - 1) {
+            /* Death stays on its last frame */
+          } else if (loop === 'once') {
+            // Play through to the last frame, then hold (or unlatch).
+            if (gs.frameIndex < safeRowFrames - 1) {
+              gs.frameIndex++;
+            } else if (gs.oneShotRow !== null && !isActiveDeath) {
+              // One-shot finished — clear the latch so the next tick can
+              // re-evaluate the dispatcher and either keep playing this row
+              // (if it's still triggered as a forward-loop kind, but it
+              // isn't because loop === 'once') or fall back to Idle/locomotion.
+              gs.oneShotRow = null;
+              gs.isAttacking = false;
+            }
+          } else if (loop === 'pingpong' && safeRowFrames > 1) {
+            const dir = pingpongDirRef.current[gs.action] ?? 1;
+            const next = gs.frameIndex + dir;
+            if (next >= safeRowFrames) {
+              // bounce off the end: step back one
+              gs.frameIndex = safeRowFrames - 2;
+              pingpongDirRef.current[gs.action] = -1;
+            } else if (next < 0) {
+              gs.frameIndex = 1;
+              pingpongDirRef.current[gs.action] = 1;
+            } else {
+              gs.frameIndex = next;
+            }
+          } else {
+            // forward loop (default)
+            gs.frameIndex = (gs.frameIndex + 1) % safeRowFrames;
+          }
           lastFrameTimeRef.current = time;
         }
 
@@ -526,12 +675,15 @@ export const GameViewport = ({ spriteSheetData, framesPerRow = 4, framesPerRowLi
 
         // Top-left HUD: action label + frame indicator
         const ACTIONS = ['IDLE', 'WALK', 'RUN', 'ATTACK', 'JUMP', 'HURT', 'DEATH'];
-        ctx.fillStyle = 'rgba(0,0,0,0.5)';
-        ctx.fillRect(8, 8, 130, 20);
-        ctx.fillStyle = '#BDFF00';
-        ctx.font = 'bold 11px ui-monospace, "Courier New", monospace';
+        ctx.fillStyle = 'rgba(15, 15, 15, 0.75)';
+        ctx.fillRect(8, 8, 134, 22);
+        ctx.strokeStyle = 'rgba(46, 46, 46, 1)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(8.5, 8.5, 133, 21);
+        ctx.fillStyle = '#3ecf8e';
+        ctx.font = '500 11px ui-monospace, "Source Code Pro", "Courier New", monospace';
         ctx.textBaseline = 'middle';
-        ctx.fillText(`${ACTIONS[gs.action] || 'IDLE'}  ${gs.frameIndex + 1}/${safeRowFrames}`, 14, 18);
+        ctx.fillText(`${ACTIONS[gs.action] || 'IDLE'}  ${gs.frameIndex + 1}/${safeRowFrames}`, 14, 19);
 
         animId = requestAnimationFrame(render);
       };
@@ -544,7 +696,18 @@ export const GameViewport = ({ spriteSheetData, framesPerRow = 4, framesPerRowLi
   }, [spriteSheetData, speed, framesPerRow]);
 
   const simulateKey = (code: string, isDown: boolean) => { keys.current[code] = isDown; };
-  const handleRevive = () => { const gs = gameState.current; gs.isDead = false; gs.action = 0; gs.frameIndex = 0; };
+  const handleRevive = () => {
+    const gs = gameState.current;
+    gs.isDead = false; gs.action = 0; gs.frameIndex = 0;
+    // Clear any latched one-shot (Death pins itself, but a stuck Attack /
+    // Hurt / custom one-shot would also block locomotion).
+    gs.oneShotRow = null;
+    gs.isAttacking = false;
+    // Defensive: if the user was holding K (keyboard) or clicked Death and the
+    // release hadn't fired yet, clear it so the next render tick doesn't
+    // immediately re-kill the character.
+    keys.current['KeyK'] = false;
+  };
 
   const toggleFullscreen = () => {
     if (!containerRef.current) return;
@@ -566,32 +729,37 @@ export const GameViewport = ({ spriteSheetData, framesPerRow = 4, framesPerRowLi
       onPointerDown={() => simulateKey(code, true)}
       onPointerUp={() => simulateKey(code, false)}
       onPointerLeave={() => simulateKey(code, false)}
-      className={`bg-[#161616] border-2 border-zinc-700 text-[#E0E0E0] hover:bg-[#BDFF00] hover:text-black font-black uppercase tracking-widest text-[10px] px-2.5 py-1.5 transition-colors select-none ${cx || ''}`}
+      className={`rounded-md bg-[#171717] border border-[#2e2e2e] text-[#b4b4b4] hover:text-[#fafafa] hover:border-[#363636] text-[12px] font-medium px-3 py-1.5 transition-colors select-none ${cx || ''}`}
     >{label}</button>
   );
 
   return (
-    <div ref={containerRef} className={`flex flex-col gap-3 ${isFullscreen ? 'bg-black w-screen h-screen' : 'bg-[#161616] p-3 border-4 border-black shadow-[6px_6px_0_#BDFF00]'}`}>
+    <div
+      ref={containerRef}
+      className={`flex flex-col gap-3 ${isFullscreen ? 'bg-[#0f0f0f] w-screen h-screen' : 'rounded-xl bg-[#171717] p-3 border border-[#2e2e2e]'}`}
+    >
       {/* Viewport */}
       <div className={`relative ${isFullscreen ? 'flex-1 flex items-center justify-center' : ''}`}>
         <canvas
           ref={canvasRef} width={CW} height={CH}
-          className={`bg-black focus:outline-none ${isFullscreen ? 'h-full max-h-screen' : 'mx-auto w-full border-2 border-zinc-900'}`}
+          className={`bg-black focus:outline-none ${isFullscreen ? 'h-full max-h-screen' : 'mx-auto w-full rounded-lg border border-[#2e2e2e]'}`}
           style={{ imageRendering: 'pixelated', aspectRatio: `${CW}/${CH}` }}
           tabIndex={0}
         />
-        {/* Corner accents (decorative pixel-art frame) */}
+        {/* Corner accents — brand emerald */}
         {!isFullscreen && (
           <>
-            <div className="pointer-events-none absolute top-0 left-0 w-3 h-3 border-l-[3px] border-t-[3px] border-[#BDFF00]" />
-            <div className="pointer-events-none absolute top-0 right-0 w-3 h-3 border-r-[3px] border-t-[3px] border-[#BDFF00]" />
-            <div className="pointer-events-none absolute bottom-0 left-0 w-3 h-3 border-l-[3px] border-b-[3px] border-[#BDFF00]" />
-            <div className="pointer-events-none absolute bottom-0 right-0 w-3 h-3 border-r-[3px] border-b-[3px] border-[#BDFF00]" />
+            <div className="pointer-events-none absolute top-0 left-0 w-3 h-3 border-l-[2px] border-t-[2px] border-[#3ecf8e] rounded-tl-lg" />
+            <div className="pointer-events-none absolute top-0 right-0 w-3 h-3 border-r-[2px] border-t-[2px] border-[#3ecf8e] rounded-tr-lg" />
+            <div className="pointer-events-none absolute bottom-0 left-0 w-3 h-3 border-l-[2px] border-b-[2px] border-[#3ecf8e] rounded-bl-lg" />
+            <div className="pointer-events-none absolute bottom-0 right-0 w-3 h-3 border-r-[2px] border-b-[2px] border-[#3ecf8e] rounded-br-lg" />
           </>
         )}
-        <button onClick={toggleFullscreen}
-          className="absolute top-2 right-2 bg-black/70 text-white px-2 py-1 text-[10px] font-mono uppercase tracking-widest border border-zinc-700 hover:bg-[#BDFF00] hover:text-black hover:border-black transition-colors z-10">
-          {isFullscreen ? 'ESC Exit' : 'Fullscreen'}
+        <button
+          onClick={toggleFullscreen}
+          className="absolute top-2 right-2 rounded-md bg-[#0f0f0f]/80 text-[#fafafa] px-2.5 py-1 text-[11px] font-medium border border-[#2e2e2e] hover:border-[#3ecf8e]/40 transition-colors z-10"
+        >
+          {isFullscreen ? 'Esc exit' : 'Fullscreen'}
         </button>
       </div>
 
@@ -600,26 +768,34 @@ export const GameViewport = ({ spriteSheetData, framesPerRow = 4, framesPerRowLi
         <>
         {/* Background selector */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
-        <span className="text-zinc-500 font-mono text-[10px] uppercase shrink-0">BG:</span>
+        <span className="label-mono text-[10px] shrink-0">BG</span>
         {BACKGROUNDS.map(b => (
-          <button key={b.id} onClick={() => setBgId(b.id)}
-            className={`px-2 py-1 text-[10px] font-mono uppercase border transition-colors shrink-0 ${bgId === b.id ? 'border-[#BDFF00] text-[#BDFF00] bg-[#BDFF00]/10' : 'border-zinc-700 text-zinc-500 hover:border-zinc-500'}`}>
+          <button
+            key={b.id}
+            onClick={() => setBgId(b.id)}
+            className={`px-3 py-1 rounded-full text-[11px] font-medium border transition-colors shrink-0 ${
+              bgId === b.id
+                ? 'border-[#3ecf8e]/40 text-[#3ecf8e] bg-[#3ecf8e]/5'
+                : 'border-[#2e2e2e] text-[#898989] hover:text-[#fafafa] hover:border-[#363636]'
+            }`}
+          >
             {b.label}
           </button>
         ))}
-        <div className="h-4 w-px bg-zinc-800 mx-1 shrink-0" />
-        <label className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500 cursor-pointer shrink-0">
-          <input type="checkbox" checked={showPlatforms} onChange={e => setShowPlatforms(e.target.checked)} className="accent-[#BDFF00] w-3 h-3" />
+        <div className="h-4 w-px bg-[#2e2e2e] mx-1 shrink-0" />
+        <label className="flex items-center gap-1.5 text-[12px] text-[#898989] cursor-pointer shrink-0">
+          <input type="checkbox" checked={showPlatforms} onChange={e => setShowPlatforms(e.target.checked)} className="accent-[#3ecf8e] w-3 h-3" />
           Platforms
         </label>
-        <label className="flex items-center gap-1.5 text-[10px] font-mono text-zinc-500 cursor-pointer shrink-0">
-          <input type="checkbox" checked={flipDefault} onChange={e => setFlipDefault(e.target.checked)} className="accent-[#BDFF00] w-3 h-3" />
-          Facing Left
+        <label className="flex items-center gap-1.5 text-[12px] text-[#898989] cursor-pointer shrink-0">
+          <input type="checkbox" checked={flipDefault} onChange={e => setFlipDefault(e.target.checked)} className="accent-[#3ecf8e] w-3 h-3" />
+          Facing left
         </label>
       </div>
 
       {/* Controls */}
-      <div className="bg-[#0D0D0D] p-3 border border-zinc-800 flex flex-col gap-2">
+      <div className="rounded-lg bg-[#0f0f0f] p-3 border border-[#2e2e2e] flex flex-col gap-2.5">
+        {/* Locomotion group — wired to arrow keys + Shift + Space (legacy). */}
         <div className="flex flex-wrap gap-1.5">
           <CtrlBtn label="← Walk" code="ArrowLeft" />
           <CtrlBtn label="Walk →" code="ArrowRight" />
@@ -627,33 +803,118 @@ export const GameViewport = ({ spriteSheetData, framesPerRow = 4, framesPerRowLi
             onPointerDown={() => { simulateKey('ArrowRight', true); simulateKey('ShiftLeft', true); }}
             onPointerUp={() => { simulateKey('ArrowRight', false); simulateKey('ShiftLeft', false); }}
             onPointerLeave={() => { simulateKey('ArrowRight', false); simulateKey('ShiftLeft', false); }}
-            className="bg-[#161616] border-2 border-zinc-700 text-[#E0E0E0] hover:bg-[#BDFF00] hover:text-black font-black uppercase tracking-widest text-[10px] px-2.5 py-1.5 transition-colors select-none"
+            className="rounded-md bg-[#171717] border border-[#2e2e2e] text-[#b4b4b4] hover:text-[#fafafa] hover:border-[#363636] text-[12px] font-medium px-3 py-1.5 transition-colors select-none"
           >Run →</button>
           <CtrlBtn label="Jump" code="KeyW" />
-          <CtrlBtn label="Attack" code="KeyJ" />
-          <CtrlBtn label="Hurt" code="KeyH" />
-          <button onClick={() => simulateKey('KeyK', true)}
-            className="bg-[#161616] border-2 border-zinc-700 text-red-400 hover:bg-red-500 hover:text-white font-black uppercase tracking-widest text-[10px] px-2.5 py-1.5 transition-colors select-none">
-            Death
-          </button>
-          <div className="h-6 w-px bg-zinc-800 mx-0.5" />
-          <button onClick={spawnEnemy}
-            className="bg-[#161616] border-2 border-orange-800 text-orange-400 hover:bg-orange-600 hover:text-white font-black uppercase tracking-widest text-[10px] px-2.5 py-1.5 transition-colors select-none">
+
+          <div className="h-6 w-px bg-[#2e2e2e] mx-0.5" />
+
+          <button
+            onClick={spawnEnemy}
+            className="rounded-md bg-[#171717] border border-[#2e2e2e] text-[hsl(28,90%,68%)] hover:border-[hsl(28,90%,40%)] text-[12px] font-medium px-3 py-1.5 transition-colors select-none"
+          >
             + Enemy
           </button>
-          <button onClick={() => { enemies.current = []; }}
-            className="bg-[#161616] border-2 border-zinc-700 text-zinc-400 hover:bg-zinc-600 hover:text-white font-black uppercase tracking-widest text-[10px] px-2.5 py-1.5 transition-colors select-none">
+          <button
+            onClick={() => { enemies.current = []; }}
+            className="rounded-md bg-[#171717] border border-[#2e2e2e] text-[#898989] hover:text-[#fafafa] hover:border-[#363636] text-[12px] font-medium px-3 py-1.5 transition-colors select-none"
+          >
             Clear
           </button>
-          <button onClick={handleRevive}
-            className="bg-[#161616] border-2 border-zinc-700 text-emerald-400 hover:bg-emerald-600 hover:text-white font-black uppercase tracking-widest text-[10px] px-2.5 py-1.5 transition-colors select-none">
+          <button
+            onClick={handleRevive}
+            className="rounded-md bg-[#171717] border border-[#3ecf8e]/30 text-[#3ecf8e] hover:bg-[#3ecf8e]/5 text-[12px] font-medium px-3 py-1.5 transition-colors select-none"
+          >
             Revive
           </button>
         </div>
+
+        {/* Action group — RFC-003. One button per non-locomotion animation
+         *  row, built dynamically so custom actions added in step 2 appear
+         *  here automatically. Once-loop rows tap-and-release; forward /
+         *  pingpong rows hold-to-loop. */}
+        {animationsMeta && animationsMeta.length > 0 && (() => {
+          const LOCO = new Set(['idle', 'walk', 'run', 'jump']);
+          const triggerable = animationsMeta
+            .map((m, i) => ({ ...m, index: i }))
+            .filter(m => !LOCO.has(m.name.trim().toLowerCase()));
+          if (triggerable.length === 0) return null;
+          return (
+            <div className="flex flex-wrap gap-1.5 items-center pt-2.5 border-t border-[#2e2e2e]">
+              <span className="label-mono text-[10px] shrink-0 mr-1">ACTIONS</span>
+              {triggerable.map(a => {
+                const lower = a.name.trim().toLowerCase();
+                // Color hints for the canonical three damage/death actions.
+                const accent =
+                  lower === 'death' ? 'text-[hsl(348,80%,72%)] hover:border-[hsl(348,75%,40%)]' :
+                  lower === 'hurt'  ? 'text-[hsl(38,90%,72%)] hover:border-[hsl(38,90%,45%)]' :
+                                      'text-[#b4b4b4] hover:text-[#fafafa] hover:border-[#363636]';
+
+                const press = () => {
+                  if (a.keyBind) simulateKey(a.keyBind, true);
+                  // Without a keyBind we still want the dispatcher to fire.
+                  // We synthesize a stable pseudo-code derived from the row
+                  // index so the render loop can pick it up if you wire
+                  // pseudo-codes to keyBind defaults later. For now, no-op
+                  // (the dispatcher only reads real keyBinds).
+                };
+                const release = () => {
+                  if (a.keyBind) simulateKey(a.keyBind, false);
+                };
+
+                if (a.loop === 'once') {
+                  // Tap behaviour: press, auto-release after one tick so
+                  // `keys.current[code]` doesn't latch (matching the Death
+                  // button fix from RFC-003 prior round).
+                  return (
+                    <button
+                      key={a.index}
+                      onClick={() => {
+                        if (!a.keyBind) return;
+                        simulateKey(a.keyBind, true);
+                        setTimeout(() => simulateKey(a.keyBind, false), 50);
+                      }}
+                      disabled={!a.keyBind}
+                      title={a.keyBind ? `Tap to play ${a.name} once` : `${a.name} has no hotkey — set one in step 2`}
+                      className={`rounded-md bg-[#171717] border border-[#2e2e2e] text-[12px] font-medium px-3 py-1.5 transition-colors select-none flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed ${accent}`}
+                    >
+                      <span>{a.name}</span>
+                      {a.keyBind && (
+                        <kbd className="px-1 rounded bg-[#0f0f0f] border border-[#2e2e2e] text-[#898989] text-[10px] font-mono leading-none py-0.5">
+                          {formatKeyCode(a.keyBind)}
+                        </kbd>
+                      )}
+                    </button>
+                  );
+                }
+                // forward / pingpong: hold-to-play.
+                return (
+                  <button
+                    key={a.index}
+                    onPointerDown={press}
+                    onPointerUp={release}
+                    onPointerLeave={release}
+                    disabled={!a.keyBind}
+                    title={a.keyBind ? `Hold to play ${a.name}` : `${a.name} has no hotkey — set one in step 2`}
+                    className={`rounded-md bg-[#171717] border border-[#2e2e2e] text-[12px] font-medium px-3 py-1.5 transition-colors select-none flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed ${accent}`}
+                  >
+                    <span>{a.name}</span>
+                    {a.keyBind && (
+                      <kbd className="px-1 rounded bg-[#0f0f0f] border border-[#2e2e2e] text-[#898989] text-[10px] font-mono leading-none py-0.5">
+                        {formatKeyCode(a.keyBind)}
+                      </kbd>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })()}
+
         <div className="flex items-center gap-2">
-          <span className="text-zinc-500 font-mono text-[10px] uppercase shrink-0">Speed: {speed}ms</span>
+          <span className="label-mono text-[10px] shrink-0">Speed: {speed}ms</span>
           <input type="range" min="50" max="300" step="10" value={speed} onChange={e => setSpeed(Number(e.target.value))}
-            className="accent-[#BDFF00] flex-1" />
+            className="accent-[#3ecf8e] flex-1" />
         </div>
       </div>
       </>

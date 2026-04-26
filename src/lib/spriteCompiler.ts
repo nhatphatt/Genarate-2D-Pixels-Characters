@@ -164,85 +164,35 @@ export async function compileSpriteSheet(
     }
 
     // ------------------------------------------------------------------
-    // AUTO-FLIP DETECTION (Rule 4 enforcement)
-    //   Detects mirrored frames by comparing color patterns of left vs right
-    //   thirds of each frame against a reference signature taken from either
-    //   `referenceImageBase64` or row-0 / frame-0. If a frame's flipped
-    //   orientation matches the reference better than its drawn orientation,
-    //   we flip it horizontally.
+    // AUTO-FLIP DETECTION — REMOVED.
+    //
+    // The previous heuristic compared a left-third vs right-third color
+    // signature of each frame against a reference signature taken from the
+    // base character image, then mirrored any frame whose flipped
+    // signature matched the reference more than 30% better than its drawn
+    // signature.
+    //
+    // This was a 1-D heuristic that conflated two different things:
+    //   (a) AI accidentally drew the character facing the wrong way, and
+    //   (b) the pose itself shifted the character's color mass to the
+    //       opposite side (e.g. Hurt frame 4 "hunched forward" with arms
+    //       wrapping the chest, Death frames collapsing sideways).
+    //
+    // Case (b) generated false positives that flipped correctly-rendered
+    // frames backwards. The most reproducible failure was Hurt frame 4,
+    // where the "hunched forward" pose puts the head/face on the side
+    // opposite the reference's facing-right shoulder, and the heuristic
+    // misread that as a mirror.
+    //
+    // We rely instead on the prompt-side guards:
+    //   - NO_FLIP rule embedded in every per-frame prompt
+    //   - Reference image attached as inlineData on every API call
+    //   - Per-frame regeneration if a specific frame truly flips
+    //
+    // Keeping `referenceImageBase64` in the signature for backwards
+    // compatibility, but it is currently unused.
     // ------------------------------------------------------------------
-    const getColorSignature = (canvas: HTMLCanvasElement) => {
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        if (!ctx) return null;
-        const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-        const thirdW = Math.floor(canvas.width / 3);
-        let lR = 0, lG = 0, lB = 0, lN = 0;
-        let rR = 0, rG = 0, rB = 0, rN = 0;
-        for (let y = 0; y < canvas.height; y++) {
-            for (let x = 0; x < canvas.width; x++) {
-                const idx = (y * canvas.width + x) * 4;
-                const a = d[idx + 3], r = d[idx], g = d[idx + 1], b = d[idx + 2];
-                if (a <= 10 || (r + g + b) <= 30) continue;
-                if (x < thirdW) { lR += r; lG += g; lB += b; lN++; }
-                else if (x >= canvas.width - thirdW) { rR += r; rG += g; rB += b; rN++; }
-            }
-        }
-        if (lN === 0 || rN === 0) return null;
-        return {
-            lR: lR / lN, lG: lG / lN, lB: lB / lN,
-            rR: rR / rN, rG: rG / rN, rB: rB / rN,
-        };
-    };
-    const colorDist = (r1: number, g1: number, b1: number, r2: number, g2: number, b2: number) =>
-        Math.abs(r1 - r2) + Math.abs(g1 - g2) + Math.abs(b1 - b2);
-
-    let globalRefSig: ReturnType<typeof getColorSignature> = null;
-    let globalRefAsymmetry = 0;
-    if (referenceImageBase64) {
-        const refImg = await loadImage(referenceImageBase64);
-        const refCanvas = document.createElement('canvas');
-        refCanvas.width = refImg.width;
-        refCanvas.height = refImg.height;
-        refCanvas.getContext('2d')!.drawImage(refImg, 0, 0);
-        globalRefSig = getColorSignature(refCanvas);
-    } else if (extractedRows.length > 0 && extractedRows[0]?.length > 0) {
-        globalRefSig = getColorSignature(extractedRows[0][0].canvas);
-    }
-    if (globalRefSig) {
-        globalRefAsymmetry = colorDist(
-            globalRefSig.lR, globalRefSig.lG, globalRefSig.lB,
-            globalRefSig.rR, globalRefSig.rG, globalRefSig.rB,
-        );
-    }
-
-    for (let i = 0; i < extractedRows.length; i++) {
-        const frames = extractedRows[i];
-        if (frames.length === 0) continue;
-        const refSig = (globalRefAsymmetry >= 15) ? globalRefSig! : getColorSignature(frames[0].canvas);
-        if (!refSig) continue;
-        const refAsym = colorDist(refSig.lR, refSig.lG, refSig.lB, refSig.rR, refSig.rG, refSig.rB);
-        if (refAsym < 15) continue;
-        for (let f = 0; f < frames.length; f++) {
-            const sig = getColorSignature(frames[f].canvas);
-            if (!sig) continue;
-            const normalDist = colorDist(sig.lR, sig.lG, sig.lB, refSig.lR, refSig.lG, refSig.lB)
-                             + colorDist(sig.rR, sig.rG, sig.rB, refSig.rR, refSig.rG, refSig.rB);
-            const flippedDist = colorDist(sig.lR, sig.lG, sig.lB, refSig.rR, refSig.rG, refSig.rB)
-                              + colorDist(sig.rR, sig.rG, sig.rB, refSig.lR, refSig.lG, refSig.lB);
-            if (flippedDist < normalDist * 0.7) {
-                const fc = frames[f].canvas;
-                const flipped = document.createElement('canvas');
-                flipped.width = fc.width;
-                flipped.height = fc.height;
-                const fctx = flipped.getContext('2d')!;
-                fctx.imageSmoothingEnabled = false;
-                fctx.translate(fc.width, 0);
-                fctx.scale(-1, 1);
-                fctx.drawImage(fc, 0, 0);
-                frames[f] = { canvas: flipped, w: fc.width, h: fc.height };
-            }
-        }
-    }
+    void referenceImageBase64;
 
     // ------------------------------------------------------------------
     // Per-row scale to globalMaxHeight.

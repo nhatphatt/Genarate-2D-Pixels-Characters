@@ -1,5 +1,5 @@
 import { Users, RefreshCw, Play, Plus } from 'lucide-react';
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 
 export type AppState = 'CREATE_CHAR' | 'CREATE_ANIM' | 'PLAY';
 
@@ -18,6 +18,8 @@ interface HeaderProps {
   animationsTotal: number;
   hasSpriteSheet: boolean;
   onNewHero?: () => void;
+  /** Optional slot for the project menu (export/import). RFC-002 §G2. */
+  projectMenu?: ReactNode;
 }
 
 interface StepDef {
@@ -33,6 +35,23 @@ const STEPS: StepDef[] = [
   { step: 3, state: 'PLAY', label: 'Export', icon: Play },
 ];
 
+/**
+ * Brand mark — emerald square with white "P" glyph.
+ * Green used as identity marker only (per Supabase guidelines).
+ */
+function BrandMark() {
+  return (
+    <div className="flex items-center gap-2 shrink-0">
+      <div className="w-7 h-7 rounded-md bg-[#3ecf8e] flex items-center justify-center">
+        <span className="text-[#0f0f0f] font-medium text-sm leading-none">P</span>
+      </div>
+      <h1 className="hidden sm:block text-[15px] font-medium text-[#fafafa] tracking-tight">
+        Pixel<span className="text-[#3ecf8e]">Engine</span>
+      </h1>
+    </div>
+  );
+}
+
 export function Header({
   appState,
   setAppState,
@@ -42,6 +61,7 @@ export function Header({
   animationsTotal,
   hasSpriteSheet,
   onNewHero,
+  projectMenu,
 }: HeaderProps) {
   const isStepDisabled = (s: AppState) => {
     if (s === 'CREATE_CHAR') return false;
@@ -63,78 +83,83 @@ export function Header({
   };
 
   return (
-    <header className="border-b border-zinc-800 bg-[#0D0D0D]/85 backdrop-blur supports-[backdrop-filter]:bg-[#0D0D0D]/70 sticky top-0 z-50">
+    <header
+      className="sticky top-0 z-50 border-b border-[#2e2e2e]"
+      style={{ background: 'rgba(15, 15, 15, 0.80)', backdropFilter: 'blur(8px)' }}
+    >
       <div className="max-w-[1600px] mx-auto px-4 sm:px-6 h-14 flex items-center gap-4">
         {/* Brand */}
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="w-7 h-7 bg-[#BDFF00] flex items-center justify-center">
-            <span className="text-black font-black text-xs leading-none">PX</span>
-          </div>
-          <h1 className="hidden sm:block font-black uppercase tracking-widest text-sm text-[#E0E0E0]">
-            Pixel<span className="text-[#BDFF00]">Engine</span>
-          </h1>
-        </div>
+        <BrandMark />
 
-        {/* Stepper */}
-        <nav className="flex items-center gap-0 mx-auto" aria-label="Workflow steps">
-          {STEPS.map((s, idx) => {
+        {/* Stepper — pill tabs, Supabase-style */}
+        <nav className="flex items-center gap-1 mx-auto" aria-label="Workflow steps">
+          {STEPS.map((s) => {
             const active = appState === s.state;
             const done = isStepDone(s.state) && !active;
             const disabled = isStepDisabled(s.state);
             const Icon = s.icon;
             const meta = stepMeta(s.state);
             return (
-              <div key={s.state} className="flex items-center">
-                <button
-                  onClick={() => !disabled && setAppState(s.state)}
-                  disabled={disabled}
-                  aria-current={active ? 'step' : undefined}
-                  className={`group flex items-center gap-2 h-9 px-2.5 sm:px-3 border transition-all
-                    ${disabled ? 'opacity-30 cursor-not-allowed border-transparent text-zinc-600' : 'cursor-pointer'}
-                    ${active
-                      ? 'bg-[#BDFF00] text-black border-[#BDFF00] shadow-[0_0_0_1px_#BDFF00]'
+              <button
+                key={s.state}
+                onClick={() => !disabled && setAppState(s.state)}
+                disabled={disabled}
+                aria-current={active ? 'step' : undefined}
+                className={[
+                  'group flex items-center gap-2 h-9 px-3 rounded-full border text-[13px] font-medium transition-colors',
+                  disabled ? 'opacity-30 cursor-not-allowed border-transparent text-[#4d4d4d]' : 'cursor-pointer',
+                  active
+                    ? 'bg-[#1c1c1c] border-[#393939] text-[#fafafa]'
+                    : done
+                      ? 'border-transparent text-[#3ecf8e] hover:bg-[#1c1c1c]'
+                      : 'border-transparent text-[#898989] hover:text-[#fafafa] hover:bg-[#1c1c1c]',
+                ].join(' ')}
+              >
+                <span
+                  className={[
+                    'w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-medium border',
+                    active
+                      ? 'border-[#3ecf8e]/40 bg-[#3ecf8e]/10 text-[#3ecf8e]'
                       : done
-                        ? 'bg-[#161616] text-[#BDFF00] border-zinc-700 hover:border-[#BDFF00]/60'
-                        : 'bg-[#161616] text-zinc-400 border-zinc-800 hover:border-zinc-600 hover:text-white'}`}
+                        ? 'border-[#3ecf8e]/40 text-[#3ecf8e]'
+                        : 'border-[#2e2e2e] text-[#898989]',
+                  ].join(' ')}
                 >
-                  <span className={`w-5 h-5 flex items-center justify-center text-[10px] font-black border
-                    ${active ? 'border-black/70 bg-black/10' : done ? 'border-[#BDFF00]/60' : 'border-zinc-600'}`}>
-                    {s.step}
+                  {s.step}
+                </span>
+                <Icon size={13} />
+                <span className="hidden md:inline">{s.label}</span>
+                {meta && (
+                  <span className="hidden sm:inline font-mono text-[11px] tabular-nums text-[#898989]">
+                    {meta}
                   </span>
-                  <Icon size={13} />
-                  <span className="hidden md:inline font-black uppercase tracking-widest text-[11px]">{s.label}</span>
-                  {meta && (
-                    <span className={`hidden sm:inline font-mono text-[10px] tabular-nums px-1
-                      ${active ? 'text-black/70' : 'text-zinc-500'}`}>
-                      {meta}
-                    </span>
-                  )}
-                </button>
-                {idx < STEPS.length - 1 && (
-                  <div className={`h-px w-4 sm:w-6 transition-colors ${isStepDone(s.state) ? 'bg-[#BDFF00]' : 'bg-zinc-800'}`} />
                 )}
-              </div>
+              </button>
             );
           })}
         </nav>
 
         {/* Right slot */}
         <div className="flex items-center gap-2 shrink-0">
+          {projectMenu}
           {activeChar && (
-            <div className="flex items-center gap-2 bg-[#161616] border border-zinc-800 pl-1 pr-2.5 py-1 max-w-[180px]">
-              <div className="w-6 h-6 bg-[#0D0D0D] flex items-center justify-center shrink-0">
-                <img src={activeChar.cleanImage} alt="" className="w-full h-full object-contain" style={{ imageRendering: 'pixelated' }} />
+            <div className="hidden sm:flex items-center gap-2 bg-[#1c1c1c] border border-[#2e2e2e] rounded-md pl-1 pr-3 py-1 max-w-[200px]">
+              <div className="w-6 h-6 rounded-sm bg-[#0f0f0f] flex items-center justify-center shrink-0">
+                <img
+                  src={activeChar.cleanImage}
+                  alt=""
+                  className="w-full h-full object-contain"
+                  style={{ imageRendering: 'pixelated' }}
+                />
               </div>
-              <span className="font-mono text-[11px] text-zinc-300 truncate">{activeChar.name}</span>
+              <span className="text-[12px] text-[#b4b4b4] truncate">{activeChar.name}</span>
             </div>
           )}
           {onNewHero && appState === 'CREATE_CHAR' && (
-            <button
-              onClick={onNewHero}
-              className="flex items-center gap-1.5 bg-[#BDFF00] text-black hover:bg-white transition-colors px-3 h-9 font-black uppercase tracking-widest text-[11px]"
-            >
+            <button onClick={onNewHero} className="btn-brand h-9 !py-0">
               <Plus size={14} />
-              <span className="hidden sm:inline">New Hero</span>
+              <span className="hidden sm:inline">Start your hero</span>
+              <span className="sm:hidden">New</span>
             </button>
           )}
         </div>
