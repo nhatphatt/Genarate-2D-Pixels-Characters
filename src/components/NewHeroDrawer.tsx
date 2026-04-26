@@ -55,8 +55,8 @@ export function NewHeroDrawer(props: NewHeroDrawerProps) {
       {/* Backdrop */}
       <div
         onClick={() => !isGenerating && onClose()}
-        className={`fixed inset-0 bg-black/70 backdrop-blur-sm z-40 transition-opacity duration-300
-          ${open ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+        className={`fixed inset-0 z-40 transition-opacity duration-300 ${open ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+        style={{ background: 'rgba(15, 15, 15, 0.55)' }}
         aria-hidden="true"
       />
 
@@ -65,26 +65,30 @@ export function NewHeroDrawer(props: NewHeroDrawerProps) {
         role="dialog"
         aria-modal="true"
         aria-label="Create new hero"
-        className={`fixed top-0 right-0 h-full w-full sm:w-[440px] bg-[#0D0D0D] border-l-2 border-zinc-800 z-50 shadow-[-8px_0_24px_rgba(0,0,0,0.6)]
-          flex flex-col transition-transform duration-300 ease-out
+        className={`fixed top-0 right-0 h-full w-full sm:w-[460px] z-50 flex flex-col transition-transform duration-300 ease-out
           ${open ? 'translate-x-0' : 'translate-x-full'}`}
+        style={{
+          background: '#0f0f0f',
+          borderLeft: '1px solid #2e2e2e',
+          boxShadow: '-16px 0 48px rgba(0, 0, 0, 0.5)',
+        }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 h-14 border-b-2 border-zinc-800 shrink-0">
+        <div className="flex items-center justify-between px-5 h-14 border-b border-[#2e2e2e] shrink-0">
           <div className="flex items-center gap-2">
-            <Sparkles size={16} className="text-[#BDFF00]" />
-            <h2 className="font-black uppercase tracking-widest text-sm text-white">New Hero</h2>
+            <Sparkles size={16} className="text-[#3ecf8e]" />
+            <h2 className="text-[15px] font-medium text-[#fafafa] tracking-tight">New Hero</h2>
           </div>
           <div className="flex items-center gap-2">
             <label className="relative cursor-pointer">
               <input type="file" accept="image/*" onChange={onUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-              <span className="flex items-center gap-1.5 bg-zinc-800 text-white hover:bg-zinc-700 px-3 py-1.5 font-black uppercase tracking-widest text-[10px] transition-colors border border-zinc-700">
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-[#2e2e2e] bg-[#171717] hover:bg-[#1c1c1c] hover:border-[#363636] px-3 py-1.5 text-[12px] font-medium text-[#b4b4b4] transition-colors">
                 <Upload size={12} /> Upload
               </span>
             </label>
             <button
               onClick={() => !isGenerating && onClose()}
-              className="text-zinc-500 hover:text-white transition-colors p-1"
+              className="text-[#898989] hover:text-[#fafafa] transition-colors p-1 rounded-md"
               aria-label="Close"
             >
               <XCircle size={18} />
@@ -93,18 +97,22 @@ export function NewHeroDrawer(props: NewHeroDrawerProps) {
         </div>
 
         {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-6">
-          {/* Mode toggle */}
+        <div className="flex-1 overflow-y-auto p-5 space-y-7">
+          {/* Mode toggle — pill tabs */}
           <div>
-            <div className="flex gap-1.5 bg-[#161616] border-2 border-zinc-800 p-1">
-              <button onClick={() => setBatchMode(false)}
-                className={`flex-1 py-2 font-black uppercase tracking-widest text-[10px] transition-all flex items-center justify-center gap-1.5
-                  ${!batchMode ? 'bg-[#BDFF00] text-black' : 'bg-transparent text-zinc-500 hover:text-zinc-300'}`}>
+            <div className="inline-flex p-1 rounded-full border border-[#2e2e2e] bg-[#171717]">
+              <button
+                onClick={() => setBatchMode(false)}
+                className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[12px] font-medium transition-colors
+                  ${!batchMode ? 'bg-[#1c1c1c] text-[#fafafa] border border-[#393939]' : 'text-[#898989] hover:text-[#fafafa] border border-transparent'}`}
+              >
                 <Sparkles size={11} /> Single
               </button>
-              <button onClick={() => setBatchMode(true)}
-                className={`flex-1 py-2 font-black uppercase tracking-widest text-[10px] transition-all flex items-center justify-center gap-1.5
-                  ${batchMode ? 'bg-[#BDFF00] text-black' : 'bg-transparent text-zinc-500 hover:text-zinc-300'}`}>
+              <button
+                onClick={() => setBatchMode(true)}
+                className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[12px] font-medium transition-colors
+                  ${batchMode ? 'bg-[#1c1c1c] text-[#fafafa] border border-[#393939]' : 'text-[#898989] hover:text-[#fafafa] border border-transparent'}`}
+              >
                 <Users size={11} /> Batch
               </button>
             </div>
@@ -112,9 +120,9 @@ export function NewHeroDrawer(props: NewHeroDrawerProps) {
 
           {/* Perspective */}
           <section>
-            <div className="flex items-center justify-between mb-2">
-              <label className="font-black uppercase tracking-widest text-[10px] text-zinc-400">Perspective</label>
-              <span className="font-mono text-[10px] text-[#BDFF00]">
+            <div className="flex items-center justify-between mb-3">
+              <label className="label-mono">Perspective</label>
+              <span className="text-[12px] text-[#3ecf8e]">
                 {PERSPECTIVES.find(p => p.id === perspective)?.label}
               </span>
             </div>
@@ -125,10 +133,10 @@ export function NewHeroDrawer(props: NewHeroDrawerProps) {
                   onClick={() => setPerspective(p.id)}
                   onMouseEnter={() => setShowPerspectiveTip(p.id)}
                   onMouseLeave={() => setShowPerspectiveTip(null)}
-                  className={`relative p-2 border-2 transition-all flex flex-col items-center group h-[110px]
+                  className={`relative p-2 rounded-lg border transition-colors flex flex-col items-center group h-[112px]
                     ${perspective === p.id
-                      ? 'border-[#BDFF00] bg-[#BDFF00]/10'
-                      : 'border-zinc-800 bg-[#161616] hover:border-zinc-600'}`}
+                      ? 'border-[#3ecf8e]/40 bg-[#3ecf8e]/5'
+                      : 'border-[#2e2e2e] bg-[#171717] hover:border-[#363636]'}`}
                 >
                   <div className="flex-1 flex items-center justify-center w-full overflow-hidden">
                     <img
@@ -138,15 +146,15 @@ export function NewHeroDrawer(props: NewHeroDrawerProps) {
                       style={{ imageRendering: 'pixelated' }}
                     />
                   </div>
-                  <span className={`font-black uppercase tracking-widest text-[9px] mt-1 ${perspective === p.id ? 'text-white' : 'text-zinc-500'}`}>
+                  <span className={`text-[11px] font-medium mt-1 ${perspective === p.id ? 'text-[#fafafa]' : 'text-[#898989]'}`}>
                     {p.label}
                   </span>
                 </button>
               ))}
             </div>
             {showPerspectiveTip && (
-              <p className="mt-2 font-mono text-[10px] text-zinc-500 leading-relaxed flex gap-1.5">
-                <Info size={11} className="shrink-0 mt-0.5 text-[#BDFF00]" />
+              <p className="mt-3 text-[12px] text-[#898989] leading-[1.55] flex gap-1.5">
+                <Info size={12} className="shrink-0 mt-0.5 text-[#3ecf8e]" />
                 {PERSPECTIVE_TIPS[showPerspectiveTip]}
               </p>
             )}
@@ -154,9 +162,9 @@ export function NewHeroDrawer(props: NewHeroDrawerProps) {
 
           {/* Art Style */}
           <section>
-            <div className="flex items-center justify-between mb-2">
-              <label className="font-black uppercase tracking-widest text-[10px] text-zinc-400">Art Style</label>
-              <span className="font-mono text-[10px] text-[#BDFF00]">
+            <div className="flex items-center justify-between mb-3">
+              <label className="label-mono">Art Style</label>
+              <span className="text-[12px] text-[#3ecf8e]">
                 {ART_STYLES.find(s => s.id === artStyle)?.label}
               </span>
             </div>
@@ -167,10 +175,10 @@ export function NewHeroDrawer(props: NewHeroDrawerProps) {
                   onClick={() => setArtStyle(s.id)}
                   onMouseEnter={() => setShowStyleTip(s.id)}
                   onMouseLeave={() => setShowStyleTip(null)}
-                  className={`relative p-2 border-2 transition-all flex flex-col items-center group h-[110px]
+                  className={`relative p-2 rounded-lg border transition-colors flex flex-col items-center group h-[112px]
                     ${artStyle === s.id
-                      ? 'border-[#BDFF00] bg-[#BDFF00]/10'
-                      : 'border-zinc-800 bg-[#161616] hover:border-zinc-600'}`}
+                      ? 'border-[#3ecf8e]/40 bg-[#3ecf8e]/5'
+                      : 'border-[#2e2e2e] bg-[#171717] hover:border-[#363636]'}`}
                 >
                   <div className="flex-1 flex items-center justify-center w-full overflow-hidden">
                     <img
@@ -180,15 +188,15 @@ export function NewHeroDrawer(props: NewHeroDrawerProps) {
                       style={{ imageRendering: 'pixelated' }}
                     />
                   </div>
-                  <span className={`font-black uppercase tracking-widest text-[9px] mt-1 ${artStyle === s.id ? 'text-white' : 'text-zinc-500'}`}>
+                  <span className={`text-[11px] font-medium mt-1 ${artStyle === s.id ? 'text-[#fafafa]' : 'text-[#898989]'}`}>
                     {s.label}
                   </span>
                 </button>
               ))}
             </div>
             {showStyleTip && (
-              <p className="mt-2 font-mono text-[10px] text-zinc-500 leading-relaxed flex gap-1.5">
-                <Info size={11} className="shrink-0 mt-0.5 text-[#BDFF00]" />
+              <p className="mt-3 text-[12px] text-[#898989] leading-[1.55] flex gap-1.5">
+                <Info size={12} className="shrink-0 mt-0.5 text-[#3ecf8e]" />
                 {STYLE_TIPS[showStyleTip]}
               </p>
             )}
@@ -196,7 +204,7 @@ export function NewHeroDrawer(props: NewHeroDrawerProps) {
 
           {/* Prompt area */}
           <section>
-            <label className="block font-black uppercase tracking-widest text-[10px] text-zinc-400 mb-2">
+            <label className="block label-mono mb-3">
               {batchMode ? 'Batch' : 'Describe Your Hero'}
             </label>
             {!batchMode ? (
@@ -204,24 +212,24 @@ export function NewHeroDrawer(props: NewHeroDrawerProps) {
                 value={charPrompt}
                 onChange={e => setCharPrompt(e.target.value)}
                 placeholder="e.g. Cyberpunk rogue with a glowing katana, neon visor, hooded jacket"
-                className="w-full bg-[#161616] border-2 border-zinc-800 p-3 text-[#E0E0E0] placeholder-zinc-600 focus:outline-none focus:border-[#BDFF00] font-mono text-sm h-28 resize-none"
+                className="input-base h-28 resize-none leading-[1.5]"
               />
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 <input
                   value={batchContext}
                   onChange={e => setBatchContext(e.target.value)}
                   placeholder="Universe / theme (e.g. Naruto, Marvel, Greek myth)"
-                  className="w-full bg-[#161616] border-2 border-zinc-800 p-2.5 text-[#E0E0E0] placeholder-zinc-600 focus:outline-none focus:border-[#BDFF00] font-mono text-xs"
+                  className="input-base"
                 />
                 <textarea
                   value={batchNames}
                   onChange={e => setBatchNames(e.target.value)}
                   placeholder={'One name per line:\nNaruto Uzumaki\nSasuke Uchiha\nSakura Haruno'}
-                  className="w-full bg-[#161616] border-2 border-zinc-800 p-3 text-[#E0E0E0] placeholder-zinc-600 focus:outline-none focus:border-[#BDFF00] font-mono text-xs h-28 resize-none"
+                  className="input-base h-28 resize-none leading-[1.5] font-mono text-[12px]"
                 />
-                <p className="font-mono text-[10px] text-zinc-500 flex items-center gap-1.5">
-                  <Users size={10} />
+                <p className="text-[12px] text-[#898989] flex items-center gap-1.5">
+                  <Users size={11} />
                   {batchCount} character{batchCount !== 1 ? 's' : ''} queued
                 </p>
               </div>
@@ -230,11 +238,11 @@ export function NewHeroDrawer(props: NewHeroDrawerProps) {
         </div>
 
         {/* Sticky footer CTA */}
-        <div className="border-t-2 border-zinc-800 p-4 bg-[#0D0D0D] shrink-0">
+        <div className="border-t border-[#2e2e2e] p-4 bg-[#0f0f0f] shrink-0">
           <button
             onClick={batchMode ? onBatchGenerate : onGenerate}
             disabled={isGenerating || !canGenerate}
-            className="w-full bg-[#BDFF00] text-black font-black uppercase tracking-widest p-3.5 text-sm border-2 border-[#BDFF00] hover:bg-white hover:border-white disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#BDFF00] transition-all flex items-center justify-center gap-2"
+            className="btn-brand w-full !py-3"
           >
             <Sparkles size={14} />
             {isGenerating
@@ -243,8 +251,8 @@ export function NewHeroDrawer(props: NewHeroDrawerProps) {
                 ? `Generate ${batchCount || ''} Hero${batchCount === 1 ? '' : 's'}`
                 : 'Generate Hero'}
           </button>
-          <p className="font-mono text-[10px] text-zinc-600 mt-2 text-center">
-            Press <kbd className="px-1 py-0.5 bg-zinc-800 text-zinc-400 border border-zinc-700">Esc</kbd> to close
+          <p className="font-mono text-[11px] text-[#4d4d4d] mt-3 text-center tracking-[1.2px] uppercase">
+            Press <kbd className="px-1.5 py-0.5 rounded-sm bg-[#1c1c1c] text-[#b4b4b4] border border-[#2e2e2e]">Esc</kbd> to close
           </p>
         </div>
       </aside>
